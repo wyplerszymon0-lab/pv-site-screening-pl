@@ -13,6 +13,25 @@ Where in a Polish municipality (*gmina*) could a ground-mounted solar farm go? T
 
 It follows on from [Solar Site Intelligence](https://github.com/wyplerszymon0-lab/Solar-site-intelligence), which assesses one surveyed site; this one searches a whole municipality.
 
+## Demo municipality: Przykona (TERYT 3027062)
+
+A rural gmina in Turek County, Greater Poland. Its land includes the former *Adamów* lignite opencast mine, and OpenStreetMap maps 26 solar farms there, 25 of them of at least 1 ha, about 413 ha in total (Overpass query, 3 Oct 2026). That makes it a good test: the screening can later be checked against where farms were actually built (issue #6). Any other gmina works by passing its TERYT code.
+
+## Usage
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+```python
+from pvscreen.boundary import fetch_gmina, area_difference
+
+gmina = fetch_gmina("3027062")    # PRG WFS, cached under data/prg/
+gmina.crs                          # EPSG:2180
+area_difference(gmina)             # 0.0014: 11 079 ha measured vs 11 095 ha official
+```
+
 ## Data sources
 
 | Data | Source | Access |
