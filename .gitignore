@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Downloaded and generated geodata
+data/
+outputs/
+*.tif
+*.gpkg
