@@ -36,6 +36,7 @@ area_difference(gmina)             # 0.0014: 11 079 ha measured vs 11 095 ha off
 python -m pvscreen.terrain 3027062   # writes outputs/dem_, slope_, aspect_3027062_5m.tif
 python -m pvscreen.protected 3027062 # writes outputs/protected_3027062.gpkg and prints areas
 python -m pvscreen.osm 3027062       # writes outputs/osm_3027062.gpkg (exclusions, grid)
+python -m pvscreen.suitability 3027062  # writes outputs/candidates_3027062.gpkg, ranked
 ```
 
 ## Results so far
@@ -107,6 +108,32 @@ Power lines and substations are not exclusions but a separate **grid** layer for
 Grid within reach: 67 power lines (51 at 110 kV, 16 at 220 kV, a few medium-voltage) and 9 substations.
 
 One bug was caught by checking the result rather than trusting it: the first version printed relations without their member ways (`out geom tags` instead of `out geom`), so all multipolygons were silently dropped, among them a 2 734 ha forest and two reservoirs of 139 and 106 ha (flooded mine pits). The exclusion share went from 26 % to 45 % once they were in. A test now checks that a relation without members is skipped and that the query asks for member geometry.
+
+### Candidate areas (issue #5)
+
+On the 5 m terrain grid a cell is suitable if it is inside the gmina, outside every exclusion zone (OSM and Natura 2000) and its slope is at most 10°. Suitable cells become polygons; strips narrower than 30 m are removed (shrink by 15 m, grow back) and pieces under 2 ha are dropped. Each candidate is scored from 0 to 1:
+
+| Criterion | Weight | Score |
+|---|---:|---|
+| Slope | 0.3 | 1 on flat ground, 0 at 10° (mean over the candidate) |
+| Aspect | 0.2 | 1 facing south, 0 facing north; ground under 2° counts as flat |
+| Grid | 0.5 | 1 at a substation, 0 at 10 km |
+
+All thresholds and weights are in [`pvscreen/screening.toml`](pvscreen/screening.toml), each with a comment saying why.
+
+The grid criterion uses the distance to the nearest **substation**, not to the nearest power line. The first version used lines, and every large candidate scored 1 because a 110 or 220 kV line crossed it. A farm of several MWp is usually connected at a substation or to the medium-voltage network, which OpenStreetMap barely maps, and a high-voltage line overhead cannot simply be tapped. The distance to the nearest line is still reported.
+
+| Przykona | |
+|---|---:|
+| Candidates | 107 |
+| Total area | 5 634 ha (51 % of the gmina) |
+| Area per candidate | 2 – 965 ha (median 17 ha) |
+| Score | 0.53 – 0.98 (median 0.84) |
+| Distance to a substation | 0 – 9.0 km (median 2.3 km) |
+| Candidates scoring ≥ 0.8 | 64, covering 3 562 ha |
+| Mostly in the *Uniejowski* protected landscape area (constraint) | 11, covering 741 ha |
+
+**What this does not see.** Half of the gmina passing a screening is mostly a statement about its flat, open farmland, not about where farms can actually be built. Two things decide a lot of that and are not in open data for a whole gmina: the **agricultural soil class** of each plot (the best classes are protected from development) and the **local zoning plan** (MPZP) or its absence. Existing solar farms are deliberately not excluded, so that issue #6 can check whether they fall inside the candidates.
 
 ## Data sources
 

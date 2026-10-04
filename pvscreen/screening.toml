@@ -1,0 +1,37 @@
+# Thresholds and weights for turning the input layers into candidate areas.
+# Every value is a screening assumption unless a source is given; change them
+# here, not in the code. Exclusion buffers live with their sources in osm.py
+# and protected.py.
+
+[mask]
+# Ground-mounted PV is built on slopes up to roughly 10°; steeper ground needs
+# terracing or costly foundations. Cells steeper than this are unsuitable.
+max_slope_deg = 10.0
+
+# Smallest candidate worth reporting. At about 1 MWp per hectare, 2 ha is a
+# ~2 MWp farm, near the lower end of what is built on open land in Poland.
+min_area_ha = 2.0
+
+# Strips narrower than twice this (e.g. a field between two road buffers) are
+# removed by shrinking every candidate by this distance and growing it back.
+min_half_width_m = 15.0
+
+[score]
+# Weights of the three criteria; they must add up to 1. The score of a
+# candidate is the weighted mean, from 0 (worst) to 1 (best).
+weight_slope = 0.3
+weight_aspect = 0.2
+weight_grid = 0.5
+
+# Slope score falls linearly from 1 on flat ground to 0 at max_slope_deg.
+
+# Aspect only matters on slopes: below this the cell counts as flat (score 1);
+# above it the score is 1 facing south and 0 facing north, (1 + cos(a - 180°)) / 2.
+flat_below_deg = 2.0
+
+# Grid score falls linearly from 1 next to a substation to 0 at this distance.
+# A farm of several MWp is usually connected at a substation (GPZ) or to the
+# medium-voltage network, which OpenStreetMap barely maps; a 110/220 kV line
+# passing overhead cannot simply be tapped. Distance to the nearest line is
+# reported but not scored. Connection cost grows with every kilometre of cable.
+grid_zero_at_m = 10000.0
