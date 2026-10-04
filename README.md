@@ -34,6 +34,7 @@ area_difference(gmina)             # 0.0014: 11 079 ha measured vs 11 095 ha off
 
 ```bash
 python -m pvscreen.terrain 3027062   # writes outputs/dem_, slope_, aspect_3027062_5m.tif
+python -m pvscreen.protected 3027062 # writes outputs/protected_3027062.gpkg and prints areas
 ```
 
 ## Results so far
@@ -53,6 +54,27 @@ Two things the checks caught:
 
 - **Voids.** The service declares no nodata value and returns gaps as exactly 0 m (1 256 cells here, where the ground is 60–140 m). They are treated as missing, which would be wrong only for land at sea level (Żuławy, the coast).
 - **Missing cells keep no slope.** Horn's kernel does not read the centre cell, so a gap would still get a slope from its neighbours; it is masked explicitly. Before the void fix, rows along two tile boundaries showed twice the average slope; after it, tile-boundary rows are no different from the rest (permutation test, p = 0.20).
+
+### Protected nature areas (issue #3)
+
+Layers from the GDOŚ WFS, clipped to the gmina. Each is a hard exclusion or a constraint to report, with its legal basis in the Nature Conservation Act of 16 April 2004 stored next to every polygon:
+
+| Layer | Treated as | Basis |
+|---|---|---|
+| National parks, nature reserves | exclude | art. 15: building banned |
+| Natura 2000 (habitats and birds) | exclude | art. 33: projects that may significantly harm a site are banned; whether a PV farm would needs an appropriate assessment, which a screening cannot predict |
+| Ecological sites, nature and landscape complexes | exclude | art. 45: transforming them banned |
+| Landscape parks | constraint | art. 17: bans set per park |
+| Protected landscape areas | constraint | art. 24: bans set by the voivodeship; PV often allowed with conditions |
+
+| Przykona | Area | Share of gmina |
+|---|---:|---:|
+| Natura 2000 bird area *Dolina Środkowej Warty* (exclude) | 60.1 ha | 0.5 % |
+| Protected landscape area *Uniejowski* (constraint) | 2 745.2 ha | 24.8 % |
+
+No national or landscape park, reserve, habitat site or ecological site lies in the gmina. A 0.02 ha strip of the *Nadwarciański* landscape area along the border is dropped: it is where the GDOŚ and PRG boundaries disagree (pieces under 0.1 ha are ignored).
+
+GDOŚ writes GeoJSON coordinates northing first (EPSG:2180's official axis order) although GeoJSON must be x, y, so responses are read as GML, whose axis order GDAL handles. Every layer is also checked to intersect the requested box, which would fail if the axis order were read wrongly.
 
 ## Data sources
 
