@@ -12,6 +12,7 @@ authors = [{ name = "Szymon Wypler" }]
 requires-python = ">=3.11"
 dependencies = [
     "geopandas>=1.0",
+    "rasterio>=1.3",
     "requests>=2.31",
 ]
 
