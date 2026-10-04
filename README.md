@@ -32,6 +32,28 @@ gmina.crs                          # EPSG:2180
 area_difference(gmina)             # 0.0014: 11 079 ha measured vs 11 095 ha official
 ```
 
+```bash
+python -m pvscreen.terrain 3027062   # writes outputs/dem_, slope_, aspect_3027062_5m.tif
+```
+
+## Results so far
+
+### Terrain (issue #2)
+
+The NMT is requested in 2 × 2 km tiles with `SCALEFACTOR=0.2`, so GUGiK's server returns a 5 m grid directly (about 640 kB per tile instead of 16 MB at 1 m; 56 tiles cover Przykona). Slope and aspect use Horn's 3 × 3 method.
+
+| Przykona (inside the boundary, 5 m cells) | |
+|---|---:|
+| Elevation | 58.7 – 138.9 m |
+| Median slope | 0.68° |
+| 95th percentile slope | 3.8° |
+| Area with slope under 5° | 96.1 % |
+
+Two things the checks caught:
+
+- **Voids.** The service declares no nodata value and returns gaps as exactly 0 m (1 256 cells here, where the ground is 60–140 m). They are treated as missing, which would be wrong only for land at sea level (Żuławy, the coast).
+- **Missing cells keep no slope.** Horn's kernel does not read the centre cell, so a gap would still get a slope from its neighbours; it is masked explicitly. Before the void fix, rows along two tile boundaries showed twice the average slope; after it, tile-boundary rows are no different from the rest (permutation test, p = 0.20).
+
 ## Data sources
 
 | Data | Source | Access |
