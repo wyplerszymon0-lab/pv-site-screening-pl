@@ -35,6 +35,7 @@ area_difference(gmina)             # 0.0014: 11 079 ha measured vs 11 095 ha off
 ```bash
 python -m pvscreen.terrain 3027062   # writes outputs/dem_, slope_, aspect_3027062_5m.tif
 python -m pvscreen.protected 3027062 # writes outputs/protected_3027062.gpkg and prints areas
+python -m pvscreen.osm 3027062       # writes outputs/osm_3027062.gpkg (exclusions, grid)
 ```
 
 ## Results so far
@@ -75,6 +76,37 @@ Layers from the GDOŚ WFS, clipped to the gmina. Each is a hard exclusion or a c
 No national or landscape park, reserve, habitat site or ecological site lies in the gmina. A 0.02 ha strip of the *Nadwarciański* landscape area along the border is dropped: it is where the GDOŚ and PRG boundaries disagree (pieces under 0.1 ha are ignored).
 
 GDOŚ writes GeoJSON coordinates northing first (EPSG:2180's official axis order) although GeoJSON must be x, y, so responses are read as GML, whose axis order GDAL handles. Every layer is also checked to intersect the requested box, which would fail if the axis order were read wrongly.
+
+### Buildings, roads, water, forest and the grid (issue #4)
+
+One Overpass query per gmina (bounding box plus 100 m, so buffers around features just across the border still count), cached as JSON. Each feature type is buffered and dissolved; the distance and its basis are stored with every zone. Values from the law are marked as such; the rest are screening assumptions and live in one table in [`pvscreen/osm.py`](pvscreen/osm.py).
+
+| Feature (OSM) | Buffer | Basis |
+|---|---:|---|
+| Motorway / expressway (`motorway`, `trunk`) | 62 / 52 m | Public Roads Act art. 43: 50 / 40 m from the carriageway outside built-up areas, + 12 m from the centreline |
+| National / voivodeship / county road | 28 / 23 / 23 m | art. 43: 25 / 20 / 20 m, + 3 m |
+| Municipal road (`unclassified`, `residential`) | 18 m | art. 43: 15 m, + 3 m |
+| Railway | 20 m | Railway Transport Act art. 53: at least 20 m from the outer track axis |
+| Any building | 50 m | assumption: no national rule for PV |
+| Residential, commercial, cemetery, allotment land | 0 m | assumption |
+| Water bodies | 0 m | — |
+| Rivers, canals / streams | 10 / 5 m | assumption |
+| Forest, wood | 15 m | assumption: tree-edge shading |
+
+Power lines and substations are not exclusions but a separate **grid** layer for scoring (issue #5). It is not clipped, since the nearest connection may lie just across the border.
+
+| Przykona | Zone | Share of gmina |
+|---|---:|---:|
+| Forest + 15 m (219 areas) | 3 330 ha | 30.1 % |
+| Buildings + 50 m (6 896) | 1 219 ha | 11.0 % |
+| Roads (242 ways) | 519 ha | 4.7 % |
+| Water bodies, rivers, streams | 386 ha | 3.5 % |
+| Built-up land | 58 ha | 0.5 % |
+| **All OSM exclusions (union)** | **5 000 ha** | **45.1 %** |
+
+Grid within reach: 67 power lines (51 at 110 kV, 16 at 220 kV, a few medium-voltage) and 9 substations.
+
+One bug was caught by checking the result rather than trusting it: the first version printed relations without their member ways (`out geom tags` instead of `out geom`), so all multipolygons were silently dropped, among them a 2 734 ha forest and two reservoirs of 139 and 106 ha (flooded mine pits). The exclusion share went from 26 % to 45 % once they were in. A test now checks that a relation without members is skipped and that the query asks for member geometry.
 
 ## Data sources
 
