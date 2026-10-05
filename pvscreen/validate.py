@@ -71,7 +71,8 @@ def farms_in_gmina(elements: list[dict], gmina: gpd.GeoDataFrame) -> gpd.GeoData
     farms = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326").to_crs(WORK_CRS)
     farms = gpd.clip(farms, gmina.to_crs(WORK_CRS))
     farms["area_ha"] = farms.geometry.area / 10_000
-    return farms[farms["area_ha"] >= MIN_FARM_HA].reset_index(drop=True)
+    # clip() may reorder rows depending on the geopandas version; keep the input order.
+    return farms[farms["area_ha"] >= MIN_FARM_HA].sort_index().reset_index(drop=True)
 
 
 def evaluate(

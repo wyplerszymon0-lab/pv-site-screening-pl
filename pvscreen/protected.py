@@ -153,7 +153,7 @@ def protected_areas(
         raw = fetch_layer(layer.name, bounds, cache_dir, http)
         if raw.empty:
             continue
-        clipped = gpd.clip(raw, boundary)
+        clipped = gpd.clip(raw, boundary).sort_index()  # clip() order varies between versions
         clipped = clipped[clipped.geometry.area >= MIN_AREA_HA * 10_000]
         if clipped.empty:
             continue
