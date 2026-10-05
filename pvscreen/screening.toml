@@ -35,3 +35,13 @@ flat_below_deg = 2.0
 # passing overhead cannot simply be tapped. Distance to the nearest line is
 # reported but not scored. Connection cost grows with every kilometre of cable.
 grid_zero_at_m = 10000.0
+
+[energy]
+# Installed capacity per hectare of candidate area. About 1 MWp per hectare is
+# a common rule of thumb for fixed-tilt farms in Poland; denser layouts reach
+# more, wider row spacing (less inter-row shading) less.
+mwp_per_ha = 1.0
+
+# System losses in percent (wiring, inverter, soiling, mismatch), the same
+# default as PVGIS and as Solar Site Intelligence.
+system_loss_pct = 14.0
