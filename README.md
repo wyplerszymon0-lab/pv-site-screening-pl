@@ -15,7 +15,7 @@ It follows on from [Solar Site Intelligence](https://github.com/wyplerszymon0-la
 
 ## Demo municipality: Przykona (TERYT 3027062)
 
-A rural gmina in Turek County, Greater Poland. Its land includes the former *Adamów* lignite opencast mine, and OpenStreetMap maps 26 solar farms there, 25 of them of at least 1 ha, about 413 ha in total (Overpass query, 3 Oct 2026). That makes it a good test: the screening can later be checked against where farms were actually built (issue #6). Any other gmina works by passing its TERYT code.
+A rural gmina in Turek County, Greater Poland. Its land includes the former *Adamów* lignite opencast mine, and OpenStreetMap maps 26 solar farms of at least 1 ha there, 709 ha in total (counted in issue #6; a first count of 413 ha on 3 Oct had missed the largest farm, mapped as a 297 ha multipolygon relation). That makes it a good test: the screening can later be checked against where farms were actually built (issue #6). Any other gmina works by passing its TERYT code.
 
 ## Usage
 
