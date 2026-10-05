@@ -36,7 +36,7 @@ area_difference(gmina)             # 0.0014: 11 079 ha measured vs 11 095 ha off
 python -m pvscreen.terrain 3027062   # writes outputs/dem_, slope_, aspect_3027062_5m.tif
 python -m pvscreen.protected 3027062 # writes outputs/protected_3027062.gpkg and prints areas
 python -m pvscreen.osm 3027062       # writes outputs/osm_3027062.gpkg (exclusions, grid)
-python -m pvscreen.suitability 3027062  # writes outputs/candidates_3027062.gpkg, ranked
+python -m pvscreen.suitability 3027062  # writes outputs/candidates_3027062.gpkg, ranked, with energy
 python -m pvscreen.validate 3027062     # compares the candidates with existing solar farms
 ```
 
@@ -159,6 +159,22 @@ Three things make this weaker than it looks:
 3. **High recall is easy when half the gmina is a candidate.** This shows that the exclusions do not throw away buildable land, not that the screening pinpoints where farms go.
 
 A sharper test would screen the land as it was before the farms were built (OpenStreetMap history) or use farms in neighbouring gminas. The second follows once the pipeline runs for any gmina in one command (issue #11).
+
+### Energy yield (issue #7)
+
+[`pvscreen/energy.py`](pvscreen/energy.py) is a Python port of the yield model from Solar Site Intelligence: NASA POWER monthly climatology (global and diffuse irradiance, air temperature) transposed to the panel plane with the isotropic-sky model, with glass reflection losses, temperature derating and 14 % system losses. Each candidate gets panels facing south at the tilt that maximises the annual yield in its climate, an installed capacity of 1 MWp per hectare (an assumption in `screening.toml`) and from that its annual energy.
+
+The port reproduces the JavaScript model to floating-point precision (largest relative difference 5 × 10⁻¹⁶ over ten cases, including the optimum tilt for Warsaw, 36°). It also inherits its validation: annual yield within 7 % of PVGIS for five climates on both hemispheres, 0.5 – 6.8 % low for well-oriented arrays.
+
+NASA POWER is queried once per 0.1° cell; four requests cover Przykona.
+
+| Przykona | |
+|---|---:|
+| Yield | 984 – 1 014 kWh/kWp per year at 36 – 37° tilt |
+| All 107 candidates | 5 634 MWp, about 5 550 GWh per year |
+| The 64 candidates scoring ≥ 0.8 | 3 562 MWp, about 3 510 GWh per year |
+
+These are theoretical upper bounds: they assume every hectare that passes the screening is covered with panels, with no check on soil class, zoning, ownership or grid capacity.
 
 ## Data sources
 

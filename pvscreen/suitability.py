@@ -34,12 +34,14 @@ class Config:
     weight_grid: float
     flat_below_deg: float
     grid_zero_at_m: float
+    mwp_per_ha: float
+    system_loss_pct: float
 
 
 def load_config(path: Path = DEFAULT_CONFIG) -> Config:
     with open(path, "rb") as f:
         raw = tomllib.load(f)
-    cfg = Config(**raw["mask"], **raw["score"])
+    cfg = Config(**raw["mask"], **raw["score"], **raw["energy"])
     total = cfg.weight_slope + cfg.weight_aspect + cfg.weight_grid
     if abs(total - 1) > 1e-9:
         raise ValueError(f"score weights must add up to 1, got {total}")
@@ -201,12 +203,17 @@ if __name__ == "__main__":
     import pandas as pd
 
     from pvscreen.boundary import fetch_gmina
+    from pvscreen.energy import add_energy
 
     gm = fetch_gmina(sys.argv[1] if len(sys.argv) > 1 else "3027062")
-    cands = screen(gm)
+    cfg = load_config()
+    cands = add_energy(screen(gm, cfg), cfg.mwp_per_ha, cfg.system_loss_pct / 100)
     out = Path("outputs") / f"candidates_{gm.iloc[0]['teryt']}.gpkg"
     out.parent.mkdir(parents=True, exist_ok=True)
     cands.to_file(out, layer="candidates", driver="GPKG")
     pd.set_option("display.width", 160)
     print(cands.drop(columns="geometry").head(15).round(2).to_string(index=False))
-    print(f"{len(cands)} candidates, {cands['area_ha'].sum():.0f} ha; written {out}")
+    print(
+        f"{len(cands)} candidates, {cands['area_ha'].sum():.0f} ha, {cands['capacity_mwp'].sum():.0f} MWp, "
+        f"{cands['energy_mwh_year'].sum() / 1000:.0f} GWh/year; written {out}"
+    )
