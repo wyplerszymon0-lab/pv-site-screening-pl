@@ -37,6 +37,7 @@ python -m pvscreen.terrain 3027062   # writes outputs/dem_, slope_, aspect_30270
 python -m pvscreen.protected 3027062 # writes outputs/protected_3027062.gpkg and prints areas
 python -m pvscreen.osm 3027062       # writes outputs/osm_3027062.gpkg (exclusions, grid)
 python -m pvscreen.suitability 3027062  # writes outputs/candidates_3027062.gpkg, ranked
+python -m pvscreen.validate 3027062     # compares the candidates with existing solar farms
 ```
 
 ## Results so far
@@ -134,6 +135,30 @@ The grid criterion uses the distance to the nearest **substation**, not to the n
 | Mostly in the *Uniejowski* protected landscape area (constraint) | 11, covering 741 ha |
 
 **What this does not see.** Half of the gmina passing a screening is mostly a statement about its flat, open farmland, not about where farms can actually be built. Two things decide a lot of that and are not in open data for a whole gmina: the **agricultural soil class** of each plot (the best classes are protected from development) and the **local zoning plan** (MPZP) or its absence. Existing solar farms are deliberately not excluded, so that issue #6 can check whether they fall inside the candidates.
+
+### Validation against existing solar farms (issue #6)
+
+Ground-mounted solar farms in OpenStreetMap (`power=plant` + `plant:source=solar`, polygons of at least 1 ha, clipped to the gmina) are compared with the candidates. If built farms fell on random land, the share of their area inside candidates would equal the candidates' share of the gmina.
+
+| Przykona | |
+|---|---:|
+| Solar farms (≥ 1 ha) | 26, covering 709 ha |
+| Farm area inside candidates | **97.7 %** |
+| Expected by chance (candidates' share of the gmina) | 50.9 % |
+| Ratio (lift) | 1.92 (the maximum possible here is 1 / 0.509 = 1.96) |
+| Farms mostly (≥ 50 %) inside candidates | 26 of 26 |
+| Mean score of candidate land under farms / of all candidate land | 0.958 / 0.860 |
+| … without substations within 500 m of a farm | 0.856 / 0.761 |
+
+**How to read this.** The screening removes almost no land where farms were actually built: not one farm was cut out by a building buffer, forest, slope or Natura 2000. Within the candidates, farm land scores about 0.1 higher than the average.
+
+Three things make this weaker than it looks:
+
+1. **The data comes after the fact.** OpenStreetMap shows the land as it is now. A farm replaced whatever stood there before, so the farm's own area is no longer mapped as forest or buildings. Most farms in Przykona sit on the reclaimed *Adamów* mine.
+2. **Farms bring their own substations.** 5 of the 9 substations lie within 31 m of a farm, which makes the farms' surroundings score well on the grid criterion. Leaving those substations out lowers every score but keeps the gap between farm land and other candidate land (0.856 vs 0.761), so the farms are also closer to the grid that was there anyway.
+3. **High recall is easy when half the gmina is a candidate.** This shows that the exclusions do not throw away buildable land, not that the screening pinpoints where farms go.
+
+A sharper test would screen the land as it was before the farms were built (OpenStreetMap history) or use farms in neighbouring gminas. The second follows once the pipeline runs for any gmina in one command (issue #11).
 
 ## Data sources
 

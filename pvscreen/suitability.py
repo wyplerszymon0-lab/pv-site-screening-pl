@@ -156,8 +156,24 @@ def score_candidates(
     return gdf
 
 
-def screen(gmina: gpd.GeoDataFrame, cfg: Config | None = None) -> gpd.GeoDataFrame:
-    """Run the whole screening for one gmina from the cached input layers."""
+def drop_substations_near(grid: gpd.GeoDataFrame, geom, within_m: float) -> gpd.GeoDataFrame:
+    """Grid layer without the substations closer than within_m to geom (lines are kept)."""
+    near = (grid["kind"] == "substation") & (grid.distance(geom) < within_m)
+    return grid[~near]
+
+
+def screen(
+    gmina: gpd.GeoDataFrame,
+    cfg: Config | None = None,
+    ignore_substations_near=None,
+    ignore_within_m: float = 500.0,
+) -> gpd.GeoDataFrame:
+    """Run the whole screening for one gmina from the cached input layers.
+
+    ignore_substations_near: optional geometry; substations within ignore_within_m
+    of it are left out of the grid score (used by validation, because a solar farm
+    often brings its own substation).
+    """
     from pvscreen import osm, protected, terrain
 
     cfg = cfg or load_config()
@@ -173,7 +189,10 @@ def screen(gmina: gpd.GeoDataFrame, cfg: Config | None = None) -> gpd.GeoDataFra
     mask = suitable_mask(slope, inside, zones, transform, cfg)
     polygons = candidate_polygons(mask, transform, cfg)
     constraints = areas[areas["kind"] == protected.CONSTRAINT]
-    return score_candidates(polygons, slope, aspect, transform, osm.grid(feats, gmina), constraints, cfg)
+    grid = osm.grid(feats, gmina)
+    if ignore_substations_near is not None:
+        grid = drop_substations_near(grid, ignore_substations_near, ignore_within_m)
+    return score_candidates(polygons, slope, aspect, transform, grid, constraints, cfg)
 
 
 if __name__ == "__main__":
