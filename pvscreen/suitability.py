@@ -198,22 +198,37 @@ def screen(
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
     import pandas as pd
 
     from pvscreen.boundary import fetch_gmina
+    from pvscreen.crs import to_output_crs
     from pvscreen.energy import add_energy
 
-    gm = fetch_gmina(sys.argv[1] if len(sys.argv) > 1 else "3027062")
+    parser = argparse.ArgumentParser(description="Screen one gmina for solar-farm candidate areas.")
+    parser.add_argument("teryt", nargs="?", default="3027062", help="7-digit TERYT code of the gmina")
+    parser.add_argument(
+        "--crs",
+        choices=["pl1992", "pl2000"],
+        default="pl1992",
+        help="coordinate system of the output: PL-1992 or the gmina's PL-2000 zone",
+    )
+    args = parser.parse_args()
+
+    gm = fetch_gmina(args.teryt)
     cfg = load_config()
     cands = add_energy(screen(gm, cfg), cfg.mwp_per_ha, cfg.system_loss_pct / 100)
-    out = Path("outputs") / f"candidates_{gm.iloc[0]['teryt']}.gpkg"
+    cands, crs_note = to_output_crs(cands, args.crs, gm)
+    suffix = "" if args.crs == "pl1992" else "_pl2000"
+    out = Path("outputs") / f"candidates_{gm.iloc[0]['teryt']}{suffix}.gpkg"
     out.parent.mkdir(parents=True, exist_ok=True)
     cands.to_file(out, layer="candidates", driver="GPKG")
     pd.set_option("display.width", 160)
     print(cands.drop(columns="geometry").head(15).round(2).to_string(index=False))
     print(
         f"{len(cands)} candidates, {cands['area_ha'].sum():.0f} ha, {cands['capacity_mwp'].sum():.0f} MWp, "
-        f"{cands['energy_mwh_year'].sum() / 1000:.0f} GWh/year; written {out}"
+        f"{cands['energy_mwh_year'].sum() / 1000:.0f} GWh/year"
     )
+    print(f"coordinates: {crs_note}")
+    print(f"written {out}")

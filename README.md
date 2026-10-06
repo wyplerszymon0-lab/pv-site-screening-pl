@@ -37,6 +37,7 @@ python -m pvscreen.terrain 3027062   # writes outputs/dem_, slope_, aspect_30270
 python -m pvscreen.protected 3027062 # writes outputs/protected_3027062.gpkg and prints areas
 python -m pvscreen.osm 3027062       # writes outputs/osm_3027062.gpkg (exclusions, grid)
 python -m pvscreen.suitability 3027062  # writes outputs/candidates_3027062.gpkg, ranked, with energy
+python -m pvscreen.suitability 3027062 --crs pl2000  # the same in the gmina's PL-2000 zone
 python -m pvscreen.validate 3027062     # compares the candidates with existing solar farms
 ```
 
@@ -175,6 +176,17 @@ NASA POWER is queried once per 0.1° cell; four requests cover Przykona.
 | The 64 candidates scoring ≥ 0.8 | 3 562 MWp, about 3 510 GWh per year |
 
 These are theoretical upper bounds: they assume every hectare that passes the screening is covered with panels, with no check on soil class, zoning, ownership or grid capacity.
+
+### PL-2000 output (issue #10)
+
+Processing stays in PL-1992, but surveyors, the cadastre and local authorities work in **PL-2000**: four 3° zones (central meridians 15°, 18°, 21° and 24° E, EPSG:2176 – 2179) with a scale of 0.999923. `--crs pl2000` writes the candidates in the zone of the gmina:
+
+- **Zone choice.** The zone is picked from the longitude of the gmina's centroid. A boundary meridian (16.5°, 19.5°, 22.5°) belongs to the zone east of it.
+- **Gminas across a zone boundary.** All of the gmina's outputs still go to one zone, with a note in the output. The part across the boundary is then slightly outside its own zone, which is acceptable that close to it.
+- **Przykona** (18.54° – 18.74° E) lies inside zone 6, so its output is EPSG:2177. Eastings start with 6, as every zone-6 coordinate does.
+- **Areas.** The `area_ha` attributes are computed in PL-1992. The same polygons measured in PL-2000 are 0.13 % larger, because PL-1992 shrinks distances here (scale about 0.9993 near its 19° meridian) and PL-2000 hardly does.
+
+The tests do not check PROJ against itself. They derive control points from the definitions of the two systems: on a central meridian, the northing is the scale factor times the GRS80 meridian arc (Helmert's series), and the easting is the false easting. PROJ matches them to within 1 mm in all four PL-2000 zones and in PL-1992, at 49°, 52° and 54.8° N. A round trip WGS 84 → PL-1992 → PL-2000 → WGS 84 loses less than a millimetre.
 
 ## Data sources
 
