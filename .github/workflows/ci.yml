@@ -15,6 +15,21 @@ jobs:
     strategy:
       matrix:
         python: ["3.11", "3.12", "3.13"]
+    # A real PostGIS for tests/test_postgis.py (they skip when there is none).
+    services:
+      postgis:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: pvscreen
+          POSTGRES_PASSWORD: pvscreen
+          POSTGRES_DB: pvscreen
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U pvscreen -d pvscreen"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      PVSCREEN_PG_URL: postgresql+psycopg://pvscreen:pvscreen@127.0.0.1:5433/pvscreen
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6

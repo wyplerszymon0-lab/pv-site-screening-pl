@@ -38,6 +38,7 @@ python -m pvscreen.protected 3027062 # writes outputs/protected_3027062.gpkg and
 python -m pvscreen.osm 3027062       # writes outputs/osm_3027062.gpkg (exclusions, grid)
 python -m pvscreen.suitability 3027062  # writes outputs/candidates_3027062.gpkg, ranked, with energy
 python -m pvscreen.suitability 3027062 --crs pl2000  # the same in the gmina's PL-2000 zone
+python -m pvscreen.postgis 3027062      # starts PostGIS (Docker), runs the overlay in SQL, compares
 python -m pvscreen.validate 3027062     # compares the candidates with existing solar farms
 ```
 
@@ -187,6 +188,46 @@ Processing stays in PL-1992, but surveyors, the cadastre and local authorities w
 - **Areas.** The `area_ha` attributes are computed in PL-1992. The same polygons measured in PL-2000 are 0.13 % larger, because PL-1992 shrinks distances here (scale about 0.9993 near its 19° meridian) and PL-2000 hardly does.
 
 The tests do not check PROJ against itself. They derive control points from the definitions of the two systems: on a central meridian, the northing is the scale factor times the GRS80 meridian arc (Helmert's series), and the easting is the false easting. PROJ matches them to within 1 mm in all four PL-2000 zones and in PL-1992, at 49°, 52° and 54.8° N. A round trip WGS 84 → PL-1992 → PL-2000 → WGS 84 loses less than a millimetre.
+
+### The overlay in PostGIS (issue #8)
+
+`python -m pvscreen.postgis 3027062` starts PostGIS with `docker compose` ([`docker-compose.yml`](docker-compose.yml), port 5433 on localhost), loads the same inputs as the Python pipeline as two tables with GiST indexes, `terrain_ok` (cells inside the gmina with slope ≤ 10°, as polygons) and `exclusions` (the OSM zones and Natura 2000), and runs the overlay in SQL:
+
+```sql
+WITH ok AS (                                   -- gentle terrain inside the gmina
+    SELECT ST_Union(geom) AS g FROM terrain_ok
+), excluded AS (                               -- every exclusion zone that touches it
+    SELECT ST_Union(e.geom) AS g
+    FROM exclusions e, ok
+    WHERE ST_Intersects(e.geom, ok.g)          -- uses the GiST index on exclusions
+), free AS (
+    SELECT ST_Difference(
+        ok.g, COALESCE(excluded.g, ST_SetSRID('POLYGON EMPTY'::geometry, ST_SRID(ok.g)))
+    ) AS g
+    FROM ok, excluded
+), opened AS (                                 -- remove strips narrower than 2 x half_width
+    SELECT ST_Intersection(
+        ST_Buffer(ST_Buffer(g, -:half_width, 'join=mitre'), :half_width, 'join=mitre'), g
+    ) AS g
+    FROM free
+), parts AS (
+    SELECT (ST_Dump(g)).geom AS g FROM opened
+)
+SELECT ST_Area(g) / 10000.0 AS area_ha, g AS geom
+FROM parts
+WHERE ST_GeometryType(g) = 'ST_Polygon' AND ST_Area(g) >= :min_area
+ORDER BY area_ha DESC
+```
+
+| Przykona | SQL (vector) | GeoPandas (5 m raster) |
+|---|---:|---:|
+| Candidates | 102 | 107 |
+| Area | 5 683.6 ha | 5 634.3 ha |
+| Time (overlay / screening) | 12.6 s | 11.7 s |
+
+The two agree to 0.9 % in area; the symmetric difference is 1.5 % of their union. No candidate exists in one version only. The count differs because the raster version splits three areas into eight: its stair-stepped edges make a few narrow necks slightly narrower, and the 30 m strip filter then cuts them.
+
+The tests run the SQL on a real PostGIS (a service container in CI, `docker compose` locally): a road across a square leaves two 7.2 ha halves, a 20 m strip and a 1 ha piece are dropped, both tables get GiST indexes. One of them caught a bug the demo gmina never hit: with no exclusion zone touching the terrain, the empty fallback polygon had SRID 0 and PostGIS refused the difference.
 
 ## Data sources
 

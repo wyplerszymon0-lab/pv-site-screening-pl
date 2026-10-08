@@ -164,11 +164,45 @@ def drop_substations_near(grid: gpd.GeoDataFrame, geom, within_m: float) -> gpd.
     return grid[~near]
 
 
+@dataclass
+class Inputs:
+    """Everything the screening needs for one gmina, on the terrain grid."""
+
+    slope: np.ndarray
+    aspect: np.ndarray
+    transform: rasterio.Affine
+    inside: np.ndarray
+    exclusions: list  # exclusion polygons: OSM zones and protected areas of kind "exclude"
+    grid: gpd.GeoDataFrame
+    constraints: gpd.GeoDataFrame
+
+
+def load_inputs(gmina: gpd.GeoDataFrame) -> Inputs:
+    """Read every input layer of one gmina (from the caches, downloading if needed)."""
+    from pvscreen import osm, protected, terrain
+
+    dem, transform = terrain.fetch_dem(gmina)
+    slope, aspect = terrain.slope_aspect(dem, terrain.DEFAULT_RES_M)
+    feats = osm.elements_to_gdf(osm.fetch_elements(gmina))
+    areas = protected.protected_areas(gmina)
+    return Inputs(
+        slope=slope,
+        aspect=aspect,
+        transform=transform,
+        inside=terrain.gmina_mask(gmina, dem.shape, transform),
+        exclusions=list(osm.exclusions(feats, gmina).geometry)
+        + list(areas[areas["kind"] == protected.EXCLUDE].geometry),
+        grid=osm.grid(feats, gmina),
+        constraints=areas[areas["kind"] == protected.CONSTRAINT],
+    )
+
+
 def screen(
     gmina: gpd.GeoDataFrame,
     cfg: Config | None = None,
     ignore_substations_near=None,
     ignore_within_m: float = 500.0,
+    inputs: Inputs | None = None,
 ) -> gpd.GeoDataFrame:
     """Run the whole screening for one gmina from the cached input layers.
 
@@ -176,25 +210,14 @@ def screen(
     of it are left out of the grid score (used by validation, because a solar farm
     often brings its own substation).
     """
-    from pvscreen import osm, protected, terrain
-
     cfg = cfg or load_config()
-    dem, transform = terrain.fetch_dem(gmina)
-    slope, aspect = terrain.slope_aspect(dem, terrain.DEFAULT_RES_M)
-    inside = terrain.gmina_mask(gmina, dem.shape, transform)
-
-    feats = osm.elements_to_gdf(osm.fetch_elements(gmina))
-    areas = protected.protected_areas(gmina)
-    zones = list(osm.exclusions(feats, gmina).geometry)
-    zones += list(areas[areas["kind"] == protected.EXCLUDE].geometry)
-
-    mask = suitable_mask(slope, inside, zones, transform, cfg)
-    polygons = candidate_polygons(mask, transform, cfg)
-    constraints = areas[areas["kind"] == protected.CONSTRAINT]
-    grid = osm.grid(feats, gmina)
+    inp = inputs or load_inputs(gmina)
+    mask = suitable_mask(inp.slope, inp.inside, inp.exclusions, inp.transform, cfg)
+    polygons = candidate_polygons(mask, inp.transform, cfg)
+    grid = inp.grid
     if ignore_substations_near is not None:
         grid = drop_substations_near(grid, ignore_substations_near, ignore_within_m)
-    return score_candidates(polygons, slope, aspect, transform, grid, constraints, cfg)
+    return score_candidates(polygons, inp.slope, inp.aspect, inp.transform, grid, inp.constraints, cfg)
 
 
 if __name__ == "__main__":
