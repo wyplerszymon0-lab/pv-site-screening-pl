@@ -120,3 +120,54 @@ def test_mask_and_summary_count_only_cells_inside_the_gmina():
     assert summary["cells"] == 50
     assert summary["share_under_5_deg"] == pytest.approx(0.6)
     assert summary["median_slope_deg"] == 2.0
+
+
+class FlakySession:
+    """Fails like the real service did, then answers."""
+
+    def __init__(self, failures):
+        self.failures = list(failures)
+        self.calls = 0
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        import requests
+
+        self.calls += 1
+        if self.failures:
+            failure = self.failures.pop(0)
+            if isinstance(failure, Exception):
+                raise failure
+
+            class Busy:
+                status_code = failure
+
+                def raise_for_status(self):
+                    raise requests.HTTPError(str(failure))
+
+            return Busy()
+
+        class Ok:
+            status_code = 200
+            content = b"II*\x00" + b"\x00" * 16
+
+            def raise_for_status(self):
+                pass
+
+        return Ok()
+
+
+def test_tile_download_retries_dropped_connections_and_5xx(tmp_path):
+    import requests
+
+    session = FlakySession([requests.exceptions.SSLError("wrong version number"), 503])
+    path = terrain._fetch_tile((470000, 454000, 472000, 456000), 5.0, tmp_path, session, waits=(0, 0))
+    assert session.calls == 3 and path.read_bytes().startswith(b"II*\x00")
+
+
+def test_tile_download_gives_up_after_the_last_retry(tmp_path):
+    import requests
+
+    session = FlakySession([requests.ConnectionError("down")] * 3)
+    with pytest.raises(requests.ConnectionError):
+        terrain._fetch_tile((470000, 454000, 472000, 456000), 5.0, tmp_path, session, waits=(0, 0))
+    assert session.calls == 3 and not list(tmp_path.iterdir())

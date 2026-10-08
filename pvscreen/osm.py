@@ -167,7 +167,7 @@ def _way_geometry(el: dict):
 
 def _relation_geometry(el: dict):
     """Multipolygon from member ways: outer rings minus inner rings."""
-    rings = {"outer": [], "inner": []}
+    rings: dict[str, list[LineString]] = {"outer": [], "inner": []}
     for m in el.get("members", []):
         if m.get("type") == "way" and len(m.get("geometry", [])) >= 2:
             rings["inner" if m.get("role") == "inner" else "outer"].append(LineString(_coords(m["geometry"])))
