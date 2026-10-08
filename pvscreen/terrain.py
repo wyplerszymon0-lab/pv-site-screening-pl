@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 from pathlib import Path
 
 import geopandas as gpd
@@ -41,7 +42,7 @@ def tile_grid(bounds: tuple[float, float, float, float], tile_m: int = TILE_M) -
     return [(x, y, x + tile_m, y + tile_m) for y in range(y0, y1, tile_m) for x in range(x0, x1, tile_m)]
 
 
-def coverage_params(tile: Tile, res_m: float = DEFAULT_RES_M) -> dict[str, str]:
+def coverage_params(tile: Tile, res_m: float = DEFAULT_RES_M) -> dict[str, str | list[str]]:
     xmin, ymin, xmax, ymax = tile
     return {
         "SERVICE": "WCS",
@@ -54,12 +55,30 @@ def coverage_params(tile: Tile, res_m: float = DEFAULT_RES_M) -> dict[str, str]:
     }
 
 
-def _fetch_tile(tile: Tile, res_m: float, cache_dir: Path, session: requests.Session) -> Path:
+# Waits before each retry of a tile. The service sometimes drops a connection
+# (seen: an SSL "wrong version number" error mid-run) or answers 5xx.
+RETRY_WAITS_S = (5, 20)
+
+
+def _get_with_retry(session: requests.Session, params: dict, waits=RETRY_WAITS_S) -> requests.Response:
+    for wait in (*waits, None):
+        try:
+            resp = session.get(NMT_WCS_URL, params=params, headers={"User-Agent": USER_AGENT}, timeout=180)
+            if resp.status_code < 500 or wait is None:
+                return resp
+        except (requests.ConnectionError, requests.Timeout):
+            if wait is None:
+                raise
+        time.sleep(wait)
+    raise AssertionError("unreachable")
+
+
+def _fetch_tile(
+    tile: Tile, res_m: float, cache_dir: Path, session: requests.Session, waits=RETRY_WAITS_S
+) -> Path:
     path = cache_dir / f"nmt_{tile[0]}_{tile[1]}_{res_m:g}m.tif"
     if not path.exists():
-        resp = session.get(
-            NMT_WCS_URL, params=coverage_params(tile, res_m), headers={"User-Agent": USER_AGENT}, timeout=180
-        )
+        resp = _get_with_retry(session, coverage_params(tile, res_m), waits)
         resp.raise_for_status()
         if not resp.content.startswith((b"II*\x00", b"MM\x00*")):
             raise RuntimeError(f"NMT WCS did not return a GeoTIFF for tile {tile}: {resp.content[:200]!r}")

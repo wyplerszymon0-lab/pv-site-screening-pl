@@ -22,7 +22,15 @@ A rural gmina in Turek County, Greater Poland. Its land includes the former *Ada
 ```bash
 pip install -e ".[dev]"
 pytest
+
+# The whole screening for any gmina, by TERYT code (downloads are cached in data/)
+python -m pvscreen --teryt 3027062               # writes outputs/3027062/screening.gpkg and reports/3027062.md
+python -m pvscreen --teryt 3027022 --crs pl2000  # output in the gmina's PL-2000 zone
 ```
+
+Reports so far: **[Przykona](reports/3027062.md)** (the demo gmina) and **[Brudzew](reports/3027022.md)**, its neighbour, run end to end without any code change.
+
+The individual steps can also be run on their own:
 
 ```python
 from pvscreen.boundary import fetch_gmina, area_difference
@@ -228,6 +236,21 @@ ORDER BY area_ha DESC
 The two agree to 0.9 % in area; the symmetric difference is 1.5 % of their union. No candidate exists in one version only. The count differs because the raster version splits three areas into eight: its stair-stepped edges make a few narrow necks slightly narrower, and the 30 m strip filter then cuts them.
 
 The tests run the SQL on a real PostGIS (a service container in CI, `docker compose` locally): a road across a square leaves two 7.2 ha halves, a 20 m strip and a 1 ha piece are dropped, both tables get GiST indexes. One of them caught a bug the demo gmina never hit: with no exclusion zone touching the terrain, the empty fallback polygon had SRID 0 and PostGIS refused the difference.
+
+### One command for any gmina (issue #11)
+
+`python -m pvscreen --teryt <code>` runs every step above: boundary, terrain, protected areas, OpenStreetMap, candidates, energy and the check against existing farms. It writes a GeoPackage (layers `boundary`, `exclusions`, `candidates`) and a Markdown report with the inputs, thresholds, exclusions, the ten best candidates, the farm check and the data attribution.
+
+| | [Przykona](reports/3027062.md) | [Brudzew](reports/3027022.md) |
+|---|---:|---:|
+| Area | 11 079 ha | 11 251 ha |
+| Excluded by OpenStreetMap layers | 45.1 % | 41.5 % |
+| Natura 2000 excluded | 60 ha | 1 535 ha |
+| Candidates | 107, 5 634 ha | 103, 5 117 ha |
+| Existing solar farms (≥ 1 ha) | 26, 709 ha | 5, 240 ha |
+| Farm area inside candidates / by chance | 97.7 % / 50.9 % | 72.3 % / 45.5 % |
+
+Brudzew needed no code change. Its first run did expose a weakness: GUGiK's terrain service dropped connections partway (an SSL error, then a closed connection), so tile downloads now retry on connection errors and 5xx answers. Downloads that already succeeded stay in the cache, so a rerun continues where the last one stopped.
 
 ## Data sources
 
