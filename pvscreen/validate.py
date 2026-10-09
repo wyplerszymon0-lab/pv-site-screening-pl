@@ -79,8 +79,18 @@ def farms_in_gmina(elements: list[dict], gmina: gpd.GeoDataFrame) -> gpd.GeoData
     for part in getattr(unary_union(list(raw.geometry)), "geoms", [unary_union(list(raw.geometry))]):
         members = raw[raw.intersects(part) & (raw.intersection(part).area > 0)]
         biggest = members.loc[members.geometry.area.idxmax()]
-        merged.append({"osm_id": ";".join(members["osm_id"]), "name": biggest["name"], "geometry": part})
-    farms = gpd.GeoDataFrame(merged, geometry="geometry", crs=WORK_CRS)
+        merged.append(
+            {
+                "osm_id": ";".join(members["osm_id"]),
+                "name": biggest["name"],
+                "geometry": part,
+                "first": members.index.min(),
+            }
+        )
+    # unary_union's part order depends on the GEOS version; keep the order of the input.
+    farms = (
+        gpd.GeoDataFrame(merged, geometry="geometry", crs=WORK_CRS).sort_values("first").drop(columns="first")
+    )
     farms["area_ha"] = farms.geometry.area / 10_000
     return farms[farms["area_ha"] >= MIN_FARM_HA].reset_index(drop=True)
 
