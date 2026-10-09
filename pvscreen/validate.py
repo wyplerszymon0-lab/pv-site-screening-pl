@@ -51,7 +51,12 @@ def fetch_farm_elements(
 
 
 def farms_in_gmina(elements: list[dict], gmina: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Ground-mounted solar farms (polygons of at least MIN_FARM_HA) clipped to the gmina."""
+    """Ground-mounted solar farms (polygons of at least MIN_FARM_HA) clipped to the gmina.
+
+    OpenStreetMap often maps one farm twice: a power=plant relation for the whole
+    site and power=plant ways for its sections. Overlapping polygons are merged,
+    so each piece of land counts once; osm_id lists every element merged into it.
+    """
     rows = []
     for el in elements:
         tags = el.get("tags", {})
@@ -68,11 +73,16 @@ def farms_in_gmina(elements: list[dict], gmina: gpd.GeoDataFrame) -> gpd.GeoData
         return gpd.GeoDataFrame(
             columns=["osm_id", "name", "area_ha", "geometry"], geometry="geometry", crs=WORK_CRS
         )
-    farms = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326").to_crs(WORK_CRS)
-    farms = gpd.clip(farms, gmina.to_crs(WORK_CRS))
+    raw = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326").to_crs(WORK_CRS)
+    raw = gpd.clip(raw, gmina.to_crs(WORK_CRS)).sort_index()  # clip() order varies between versions
+    merged = []
+    for part in getattr(unary_union(list(raw.geometry)), "geoms", [unary_union(list(raw.geometry))]):
+        members = raw[raw.intersects(part) & (raw.intersection(part).area > 0)]
+        biggest = members.loc[members.geometry.area.idxmax()]
+        merged.append({"osm_id": ";".join(members["osm_id"]), "name": biggest["name"], "geometry": part})
+    farms = gpd.GeoDataFrame(merged, geometry="geometry", crs=WORK_CRS)
     farms["area_ha"] = farms.geometry.area / 10_000
-    # clip() may reorder rows depending on the geopandas version; keep the input order.
-    return farms[farms["area_ha"] >= MIN_FARM_HA].sort_index().reset_index(drop=True)
+    return farms[farms["area_ha"] >= MIN_FARM_HA].reset_index(drop=True)
 
 
 def evaluate(
@@ -154,11 +164,60 @@ def reason_layers(gmina: gpd.GeoDataFrame) -> dict[str, object]:
     return layers
 
 
+def pooled_table(rows: list[dict]) -> pd.DataFrame:
+    """One row per gmina plus a pooled row.
+
+    Each input row: teryt, name, gmina_ha, candidate_ha, farms, farm_ha, farm_ha_in.
+    The pooled chance baseline weights each gmina's candidate share by its farm
+    area, because that is where the pooled farm area could have fallen.
+    """
+    table = pd.DataFrame(rows)
+    table["in_candidates"] = table["farm_ha_in"] / table["farm_ha"]
+    table["by_chance"] = table["candidate_ha"] / table["gmina_ha"]
+    farm_ha = table["farm_ha"].sum()
+    pooled = {
+        "teryt": "",
+        "name": "all",
+        "gmina_ha": table["gmina_ha"].sum(),
+        "candidate_ha": table["candidate_ha"].sum(),
+        "farms": int(table["farms"].sum()),
+        "farm_ha": farm_ha,
+        "farm_ha_in": table["farm_ha_in"].sum(),
+        "in_candidates": table["farm_ha_in"].sum() / farm_ha if farm_ha else float("nan"),
+        "by_chance": (table["farm_ha"] * table["by_chance"]).sum() / farm_ha if farm_ha else float("nan"),
+    }
+    table = pd.concat([table, pd.DataFrame([pooled])], ignore_index=True)
+    table["lift"] = table["in_candidates"] / table["by_chance"]
+    return table
+
+
+def _summary_row(teryt: str) -> dict:
+    from pvscreen import pipeline
+
+    r = pipeline.run(teryt)
+    gmina_ha = r.gmina.to_crs(WORK_CRS).geometry.area.sum() / 10_000
+    v = r.validation or {"farms": 0, "farm_area_ha": 0.0, "farm_area_in_candidates": float("nan")}
+    return {
+        "teryt": teryt,
+        "name": r.gmina.iloc[0]["name"],
+        "gmina_ha": gmina_ha,
+        "candidate_ha": r.candidates["area_ha"].sum(),
+        "farms": v["farms"],
+        "farm_ha": v["farm_area_ha"],
+        "farm_ha_in": v["farm_area_ha"] * v["farm_area_in_candidates"] if v["farms"] else 0.0,
+    }
+
+
 if __name__ == "__main__":
     import sys
 
     from pvscreen.boundary import fetch_gmina
     from pvscreen.suitability import screen
+
+    if len(sys.argv) > 2:  # several gminas: one pooled table
+        pd.set_option("display.width", 180)
+        print(pooled_table([_summary_row(t) for t in sys.argv[1:]]).round(3).to_string(index=False))
+        sys.exit(0)
 
     gm = fetch_gmina(sys.argv[1] if len(sys.argv) > 1 else "3027062")
     farms = farms_in_gmina(fetch_farm_elements(gm), gm)

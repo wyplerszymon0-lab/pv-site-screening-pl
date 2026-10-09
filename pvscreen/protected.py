@@ -114,8 +114,13 @@ def read_layer(path: Path, bounds: tuple[float, float, float, float]) -> gpd.Geo
         if matched != returned:
             raise ValueError(f"{path.name}: server returned {returned} of {matched} features")
     gdf = gpd.read_file(path).to_crs(WORK_CRS)
-    if not gdf.intersects(box(*bounds)).any():
-        raise ValueError(f"{path.name}: no feature intersects the requested box; axis order changed?")
+    # The server selects features whose bounding box meets the request box, so a
+    # feature itself may lie outside it (a long river valley 3.7 km from Turek).
+    # Swapped axes would move everything hundreds of km, so check bounding boxes.
+    if not gdf.envelope.intersects(box(*bounds)).any():
+        raise ValueError(
+            f"{path.name}: no feature's bounding box meets the requested box; axis order changed?"
+        )
     return gdf
 
 

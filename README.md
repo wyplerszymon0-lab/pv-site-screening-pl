@@ -15,7 +15,7 @@ It follows on from [Solar Site Intelligence](https://github.com/wyplerszymon0-la
 
 ## Demo municipality: Przykona (TERYT 3027062)
 
-A rural gmina in Turek County, Greater Poland. Its land includes the former *Adamów* lignite opencast mine, and OpenStreetMap maps 26 solar farms of at least 1 ha there, 709 ha in total (counted in issue #6; a first count of 413 ha on 3 Oct had missed the largest farm, mapped as a 297 ha multipolygon relation). That makes it a good test: the screening can later be checked against where farms were actually built (issue #6). Any other gmina works by passing its TERYT code.
+A rural gmina in Turek County, Greater Poland. Its land includes the former *Adamów* lignite opencast mine, and OpenStreetMap maps 19 solar farms of at least 1 ha there, 413 ha of land in total. (They are mapped by 26 elements: the largest site is both a 297 ha relation and several ways for its sections. Adding the 26 polygons gave 709 ha, a figure that stood in this README from 5 to 9 Oct; overlapping farm polygons are now merged first.) That makes it a good test: the screening can later be checked against where farms were actually built (issue #6). Any other gmina works by passing its TERYT code.
 
 ## Usage
 
@@ -28,7 +28,7 @@ python -m pvscreen --teryt 3027062               # writes outputs/3027062/screen
 python -m pvscreen --teryt 3027022 --crs pl2000  # output in the gmina's PL-2000 zone
 ```
 
-Reports so far: **[Przykona](reports/3027062.md)** (the demo gmina) and **[Brudzew](reports/3027022.md)**, its neighbour, run end to end without any code change.
+Reports: **[Przykona](reports/3027062.md)** (the demo gmina) and its four neighbours **[Brudzew](reports/3027022.md)**, **[Dobra](reports/3027033.md)**, **[Uniejów](reports/1011043.md)** and **[Turek](reports/3027082.md)**, all run with the same command.
 
 The individual steps can also be run on their own:
 
@@ -148,27 +148,44 @@ The grid criterion uses the distance to the nearest **substation**, not to the n
 
 ### Validation against existing solar farms (issue #6)
 
-Ground-mounted solar farms in OpenStreetMap (`power=plant` + `plant:source=solar`, polygons of at least 1 ha, clipped to the gmina) are compared with the candidates. If built farms fell on random land, the share of their area inside candidates would equal the candidates' share of the gmina.
+Ground-mounted solar farms in OpenStreetMap (`power=plant` + `plant:source=solar`, clipped to the gmina, overlapping polygons merged so each piece of land counts once, at least 1 ha) are compared with the candidates. If built farms fell on random land, the share of their area inside candidates would equal the candidates' share of the gmina.
 
 | Przykona | |
 |---|---:|
-| Solar farms (≥ 1 ha) | 26, covering 709 ha |
-| Farm area inside candidates | **97.7 %** |
+| Solar farms (≥ 1 ha) | 19, covering 413 ha |
+| Farm area inside candidates | **98.0 %** |
 | Expected by chance (candidates' share of the gmina) | 50.9 % |
-| Ratio (lift) | 1.92 (the maximum possible here is 1 / 0.509 = 1.96) |
-| Farms mostly (≥ 50 %) inside candidates | 26 of 26 |
-| Mean score of candidate land under farms / of all candidate land | 0.958 / 0.860 |
-| … without substations within 500 m of a farm | 0.856 / 0.761 |
+| Ratio (lift) | 1.93 (the maximum possible here is 1 / 0.509 = 1.96) |
+| Farms mostly (≥ 50 %) inside candidates | 19 of 19 |
+| Mean score of candidate land under farms / of all candidate land | 0.953 / 0.860 |
+| … without substations within 500 m of a farm | 0.879 / 0.761 |
 
 **How to read this.** The screening removes almost no land where farms were actually built: not one farm was cut out by a building buffer, forest, slope or Natura 2000. Within the candidates, farm land scores about 0.1 higher than the average.
 
 Three things make this weaker than it looks:
 
 1. **The data comes after the fact.** OpenStreetMap shows the land as it is now. A farm replaced whatever stood there before, so the farm's own area is no longer mapped as forest or buildings. Most farms in Przykona sit on the reclaimed *Adamów* mine.
-2. **Farms bring their own substations.** 5 of the 9 substations lie within 31 m of a farm, which makes the farms' surroundings score well on the grid criterion. Leaving those substations out lowers every score but keeps the gap between farm land and other candidate land (0.856 vs 0.761), so the farms are also closer to the grid that was there anyway.
+2. **Farms bring their own substations.** 5 of the 9 substations lie within 31 m of a farm, which makes the farms' surroundings score well on the grid criterion. Leaving those substations out lowers every score but keeps the gap between farm land and other candidate land (0.879 vs 0.761), so the farms are also closer to the grid that was there anyway.
 3. **High recall is easy when half the gmina is a candidate.** This shows that the exclusions do not throw away buildable land, not that the screening pinpoints where farms go.
 
-A sharper test would screen the land as it was before the farms were built (OpenStreetMap history) or use farms in neighbouring gminas. The second follows once the pipeline runs for any gmina in one command (issue #11).
+A sharper test would screen the land as it was before the farms were built (OpenStreetMap history). The neighbouring gminas, below, are a second check.
+
+#### All five gminas
+
+The same check for Przykona and its four neighbours, each screened with `python -m pvscreen` and pooled with `python -m pvscreen.validate 3027062 3027022 3027033 1011043 3027082`. The pooled chance baseline weights each gmina's candidate share by its farm area.
+
+| Gmina | Farms | Farm area | Inside candidates | By chance | Lift |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| [Przykona](reports/3027062.md) | 19 | 412.9 ha | 98.0 % | 50.9 % | 1.93 |
+| [Brudzew](reports/3027022.md) | 4 | 120.8 ha | 72.4 % | 45.5 % | 1.59 |
+| [Dobra](reports/3027033.md) | 3 | 4.0 ha | 95.9 % | 53.3 % | 1.80 |
+| [Uniejów](reports/1011043.md) | 3 | 7.2 ha | 94.9 % | 48.0 % | 1.98 |
+| [Turek](reports/3027082.md) | 4 | 12.8 ha | 98.5 % | 45.8 % | 2.15 |
+| **All five** | **33** | **557.6 ha** | **92.4 %** | **49.6 %** | **1.87** |
+| The four neighbours only | 14 | 144.8 ha | 76.5 % | 45.9 % | 1.67 |
+
+- **The neighbours confirm the pattern, but weakly.** Built farms fall inside candidates far more often than chance in every gmina. Outside Przykona, though, 121 of the 145 ha are in Brudzew, and Dobra, Uniejów and Turek have only 4 – 13 ha of farms each.
+- **Brudzew is the only real miss.** 33 ha of its farm land lies outside the candidates: 22 ha in the 50 m building buffers (the farms' own inverter and transformer buildings, mapped as buildings), 4 ha too steep, 3.5 ha in a county-road buffer. That is the after-the-fact problem again: the farm created the features that now exclude it.
 
 ### Energy yield (issue #7)
 
@@ -247,8 +264,8 @@ The tests run the SQL on a real PostGIS (a service container in CI, `docker comp
 | Excluded by OpenStreetMap layers | 45.1 % | 41.5 % |
 | Natura 2000 excluded | 60 ha | 1 535 ha |
 | Candidates | 107, 5 634 ha | 103, 5 117 ha |
-| Existing solar farms (≥ 1 ha) | 26, 709 ha | 5, 240 ha |
-| Farm area inside candidates / by chance | 97.7 % / 50.9 % | 72.3 % / 45.5 % |
+| Existing solar farms (≥ 1 ha) | 19, 413 ha | 4, 121 ha |
+| Farm area inside candidates / by chance | 98.0 % / 50.9 % | 72.4 % / 45.5 % |
 
 Brudzew needed no code change. Its first run did expose a weakness: GUGiK's terrain service dropped connections partway (an SSL error, then a closed connection), so tile downloads now retry on connection errors and 5xx answers. Downloads that already succeeded stay in the cache, so a rerun continues where the last one stopped.
 
