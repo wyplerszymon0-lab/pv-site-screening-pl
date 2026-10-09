@@ -57,7 +57,7 @@ def coverage_params(tile: Tile, res_m: float = DEFAULT_RES_M) -> dict[str, str |
 
 # Waits before each retry of a tile. The service sometimes drops a connection
 # (seen: an SSL "wrong version number" error mid-run) or answers 5xx.
-RETRY_WAITS_S = (5, 20)
+RETRY_WAITS_S = (10, 60, 180)
 
 
 def _get_with_retry(session: requests.Session, params: dict, waits=RETRY_WAITS_S) -> requests.Response:

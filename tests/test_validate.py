@@ -76,3 +76,61 @@ def test_substations_near_farms_can_be_left_out_of_the_grid():
     farm = box(10, 10, 200, 200)
     kept = suitability.drop_substations_near(grid, farm, 500)
     assert list(kept["osm_id"]) == ["s2", "l1"]
+
+
+def test_pooled_table_weights_the_chance_baseline_by_farm_area():
+    rows = [
+        {
+            "teryt": "1",
+            "name": "A",
+            "gmina_ha": 100.0,
+            "candidate_ha": 50.0,
+            "farms": 2,
+            "farm_ha": 10.0,
+            "farm_ha_in": 9.0,
+        },
+        {
+            "teryt": "2",
+            "name": "B",
+            "gmina_ha": 100.0,
+            "candidate_ha": 20.0,
+            "farms": 1,
+            "farm_ha": 30.0,
+            "farm_ha_in": 12.0,
+        },
+        {
+            "teryt": "3",
+            "name": "C",
+            "gmina_ha": 100.0,
+            "candidate_ha": 40.0,
+            "farms": 0,
+            "farm_ha": 0.0,
+            "farm_ha_in": 0.0,
+        },
+    ]
+    table = validate.pooled_table(rows).set_index("name")
+    assert table.loc["A", "in_candidates"] == pytest.approx(0.9)
+    assert table.loc["A", "by_chance"] == pytest.approx(0.5)
+    assert table.loc["B", "lift"] == pytest.approx(0.4 / 0.2)
+    assert pd.isna(table.loc["C", "in_candidates"])  # no farms, nothing to check
+    pooled = table.loc["all"]
+    assert pooled.farms == 3 and pooled.farm_ha == 40
+    assert pooled.in_candidates == pytest.approx(21 / 40)
+    assert pooled.by_chance == pytest.approx((10 * 0.5 + 30 * 0.2) / 40)  # weighted by farm area
+
+
+def test_a_farm_mapped_twice_counts_once():
+    # A power=plant relation for the whole site plus a way for one section of it.
+    gmina = gpd.GeoDataFrame(
+        {"teryt": ["0000002"]}, geometry=[box(400_000, 400_000, 401_000, 401_000)], crs="EPSG:2180"
+    )
+    tags = {"power": "plant", "plant:source": "solar"}
+    elements = [
+        osm_way(1, {**tags, "name": "Whole site"}, (100, 100, 500, 300)),  # 8 ha
+        osm_way(2, tags, (100, 100, 300, 300)),  # 4 ha inside it
+        osm_way(3, tags, (700, 700, 900, 800)),  # 2 ha elsewhere
+    ]
+    farms = validate.farms_in_gmina(elements, gmina)
+    assert sorted(farms["area_ha"].round(3)) == [2.0, 8.0]
+    site = farms[farms["area_ha"].round(3) == 8.0].iloc[0]
+    assert site["name"] == "Whole site" and set(site["osm_id"].split(";")) == {"way/1", "way/2"}

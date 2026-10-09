@@ -109,3 +109,19 @@ def test_truncated_response_is_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match="2 of 5"):
         protected.read_layer(path, PRZYKONA_BOUNDS)
+
+
+def test_a_feature_selected_only_by_its_bounding_box_is_accepted(tmp_path, gmina):
+    # GDOŚ returns features whose bounding box meets the request box. For gmina
+    # Turek that included the Warta valley bird area, 3.7 km outside the gmina.
+    path = tmp_path / "birds.gml"
+    shutil.copy(FIXTURES / "gdos" / "ObszarySpecjalnejOchrony_468565_452823_482254_464951.gml", path)
+    feature = protected.read_layer(path, PRZYKONA_BOUNDS).geometry.iloc[0]
+    hole = feature.envelope.difference(feature.buffer(1000))  # inside the envelope, >1 km from the area
+    corner = hole.representative_point()
+    query = (corner.x - 100, corner.y - 100, corner.x + 100, corner.y + 100)
+    assert not feature.intersects(box(*query)) and feature.envelope.intersects(box(*query))
+    assert len(protected.read_layer(path, query)) == 1
+    # and clipped to such a gmina it contributes nothing
+    far_gmina = gpd.GeoDataFrame(geometry=[box(*query)], crs="EPSG:2180")
+    assert gpd.clip(protected.read_layer(path, query), far_gmina).empty
