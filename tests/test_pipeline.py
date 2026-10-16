@@ -120,3 +120,37 @@ def test_cli_requires_a_teryt(capsys):
     with pytest.raises(SystemExit):
         cli.main([])
     assert "--teryt" in capsys.readouterr().err
+
+
+def test_outputs_include_grid_farms_and_slope_for_the_map(tmp_path):
+    import numpy as np
+    import rasterio
+    from shapely.geometry import LineString, Point
+
+    r = result()
+    r.grid = gpd.GeoDataFrame(
+        {"kind": ["line", "substation"], "osm_id": ["way/1", "node/2"], "voltage": ["110000", None]},
+        geometry=[LineString([(0, 0), (1000, 1000)]), Point(500, 500)],
+        crs=CRS,
+    )
+    r.farms = gpd.GeoDataFrame(
+        {"osm_id": ["way/3"], "name": ["Farm"], "area_ha": [4.0]}, geometry=[B(0, 0, 200, 200)], crs=CRS
+    )
+    r.slope = np.array([[1.5, np.nan], [3.0, 12.0]])
+    r.transform = rasterio.Affine(500, 0, 400_000, 0, -500, 500_000)
+    path, _ = pipeline.write_outputs(r, out_root=tmp_path)
+
+    grid = gpd.read_file(path, layer="grid")
+    assert list(grid["kind"]) == ["line", "substation"] and grid.crs.to_epsg() == 2180
+    assert list(gpd.read_file(path, layer="farms")["name"]) == ["Farm"]
+    with rasterio.open(path.parent / "slope.tif") as src:
+        band = src.read(1, masked=True)
+        assert src.crs.to_epsg() == 2180 and band.mask[0, 1] and float(band[1, 1]) == 12.0
+
+
+def test_outputs_skip_map_layers_that_are_missing(tmp_path):
+    path, _ = pipeline.write_outputs(result(), out_root=tmp_path)  # no grid, slope or farms
+    import pyogrio
+
+    assert {name for name, _ in pyogrio.list_layers(path)} == {"boundary", "exclusions", "candidates"}
+    assert not (path.parent / "slope.tif").exists()
