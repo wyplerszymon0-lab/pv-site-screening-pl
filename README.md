@@ -17,6 +17,10 @@ It follows on from [Solar Site Intelligence](https://github.com/wyplerszymon0-la
 
 A rural gmina in Turek County, Greater Poland. Its land includes the former *Adamów* lignite opencast mine, and OpenStreetMap maps 19 solar farms of at least 1 ha there, 413 ha of land in total. (They are mapped by 26 elements: the largest site is both a 297 ha relation and several ways for its sections. Adding the 26 polygons gave 709 ha, a figure that stood in this README from 5 to 9 Oct; overlapping farm polygons are now merged first.) That makes it a good test: the screening can later be checked against where farms were actually built (issue #6). Any other gmina works by passing its TERYT code.
 
+![Screening map of Przykona: candidate areas by score, exclusions by reason, slope, power grid and existing solar farms](docs/map_3027062.png)
+
+<sub>Exported from the QGIS project in [`qgis/`](qgis/) (see [Map in QGIS](#map-in-qgis-issue-9)). Candidates (orange, darker = better score) cover most of the open land; the steep red patch in the north is the edge of the former Adamów pit, and the black outlines are the solar farms already built.</sub>
+
 ## Usage
 
 ```bash
@@ -26,6 +30,10 @@ pytest
 # The whole screening for any gmina, by TERYT code (downloads are cached in data/)
 python -m pvscreen --teryt 3027062               # writes outputs/3027062/screening.gpkg and reports/3027062.md
 python -m pvscreen --teryt 3027022 --crs pl2000  # output in the gmina's PL-2000 zone
+
+# Styled QGIS project + exported map (needs QGIS; run with the Python that ships with it)
+"C:\Program Files\QGIS 3.44.14\bin\python-qgis-ltr.bat" qgis/make_project.py 3027062   # Windows
+python3 qgis/make_project.py 3027062                                                      # Linux/macOS
 ```
 
 Reports: **[Przykona](reports/3027062.md)** (the demo gmina) and its four neighbours **[Brudzew](reports/3027022.md)**, **[Dobra](reports/3027033.md)**, **[Uniejów](reports/1011043.md)** and **[Turek](reports/3027082.md)**, all run with the same command.
@@ -268,6 +276,16 @@ The tests run the SQL on a real PostGIS (a service container in CI, `docker comp
 | Farm area inside candidates / by chance | 98.0 % / 50.9 % | 72.4 % / 45.5 % |
 
 Brudzew needed no code change. Its first run did expose a weakness: GUGiK's terrain service dropped connections partway (an SSL error, then a closed connection), so tile downloads now retry on connection errors and 5xx answers. Downloads that already succeeded stay in the cache, so a rerun continues where the last one stopped.
+
+### Map in QGIS (issue #9)
+
+[`qgis/make_project.py`](qgis/make_project.py) builds the project with PyQGIS from the pipeline outputs, so the styling is code and reruns for any gmina:
+
+- **Layers**, top to bottom: gmina boundary, power lines and substations, existing solar farms (outlines), candidate areas graduated by score, exclusions grouped by reason (buildings and built-up land, roads, water, forest, excluded nature areas, and protected landscape hatched because it is a constraint, not an exclusion), slope (transparent on flat ground, red from the 10° screening limit), and a greyscale OpenStreetMap basemap.
+- **Print layout** (A4 landscape): title, legend, scale bar, north arrow and the data attribution, exported to [`docs/map_3027062.png`](docs/map_3027062.png) at 150 dpi.
+- **Relative paths:** [`qgis/3027062.qgz`](qgis/3027062.qgz) points at `../outputs/3027062/`, so after `python -m pvscreen --teryt 3027062` the project opens in QGIS (3.44 LTR) wherever the repository is cloned. The pipeline now also writes the `grid` and `farms` layers and `slope.tif` for it.
+
+Opening it is the place to refine the cartography by hand; the script is the reproducible baseline.
 
 ## Data sources
 

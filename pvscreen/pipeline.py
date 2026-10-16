@@ -4,19 +4,22 @@
 
 Every download is cached (data/), so a second run for the same gmina only
 recomputes. Outputs: outputs/<teryt>/screening.gpkg (layers boundary,
-exclusions, candidates) and reports/<teryt>.md.
+exclusions, candidates, grid, farms), outputs/<teryt>/slope.tif and
+reports/<teryt>.md. qgis/make_project.py turns them into a styled QGIS project.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pandas as pd
+import rasterio
 
-from pvscreen import WORK_CRS, __version__, crs, osm, protected, validate
+from pvscreen import WORK_CRS, __version__, crs, osm, protected, terrain, validate
 from pvscreen.boundary import fetch_gmina
 from pvscreen.energy import add_energy
 from pvscreen.suitability import Config, load_config, load_inputs, screen
@@ -31,6 +34,10 @@ class Result:
     candidates: gpd.GeoDataFrame
     farms: gpd.GeoDataFrame
     validation: dict | None  # None when OSM maps no solar farm of at least 1 ha in the gmina
+    # For the map: power lines and substations, and the slope raster (NaN outside the gmina).
+    grid: gpd.GeoDataFrame | None = None
+    slope: np.ndarray | None = field(default=None, repr=False)
+    transform: rasterio.Affine | None = None
 
 
 def run(teryt: str, cfg: Config | None = None) -> Result:
@@ -50,13 +57,17 @@ def run(teryt: str, cfg: Config | None = None) -> Result:
         candidates=candidates,
         farms=farms,
         validation=summary,
+        grid=inputs.grid,
+        slope=np.where(inputs.inside, inputs.slope, np.nan),
+        transform=inputs.transform,
     )
 
 
 def write_outputs(
     result: Result, system: str = "pl1992", out_root: Path = Path("outputs")
 ) -> tuple[Path, str]:
-    """GeoPackage with boundary, exclusions and candidates, in PL-1992 or the PL-2000 zone."""
+    """GeoPackage with boundary, exclusions, candidates, grid and farms, in PL-1992 or the
+    PL-2000 zone, plus the slope raster (always PL-1992; GIS software reprojects it on the fly)."""
     teryt = result.gmina.iloc[0]["teryt"]
     path = out_root / teryt / "screening.gpkg"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -74,11 +85,17 @@ def write_outputs(
         ),
         "candidates": result.candidates,
     }
+    if result.grid is not None:
+        layers["grid"] = result.grid[["kind", "osm_id", "voltage", "geometry"]]
+    if len(result.farms):
+        layers["farms"] = result.farms[["osm_id", "name", "area_ha", "geometry"]]
     for name, layer in layers.items():
         out, note = crs.to_output_crs(
             gpd.GeoDataFrame(layer, geometry="geometry", crs=WORK_CRS), system, result.gmina
         )
         out.to_file(path, layer=name, driver="GPKG")
+    if result.slope is not None:
+        terrain.write_raster(path.parent / "slope.tif", result.slope, result.transform)
     return path, note
 
 
