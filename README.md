@@ -30,6 +30,8 @@ pytest
 # The whole screening for any gmina, by TERYT code (downloads are cached in data/)
 python -m pvscreen --teryt 3027062               # writes outputs/3027062/screening.gpkg and reports/3027062.md
 python -m pvscreen --teryt 3027022 --crs pl2000  # output in the gmina's PL-2000 zone
+python -m pvscreen --teryt 3027062 --source bdot10k  # exclusions from GUGiK's BDOT10k instead of OSM
+python -m pvscreen.compare_sources 3027062        # compare the two sources
 
 # Styled QGIS project + exported map (needs QGIS; run with the Python that ships with it)
 "C:\Program Files\QGIS 3.44.14\bin\python-qgis-ltr.bat" qgis/make_project.py 3027062   # Windows
@@ -277,6 +279,52 @@ The tests run the SQL on a real PostGIS (a service container in CI, `docker comp
 
 Brudzew needed no code change. Its first run did expose a weakness: GUGiK's terrain service dropped connections partway (an SSL error, then a closed connection), so tile downloads now retry on connection errors and 5xx answers. Downloads that already succeeded stay in the cache, so a rerun continues where the last one stopped.
 
+### BDOT10k vs OpenStreetMap (issue #24)
+
+OpenStreetMap is mapped by volunteers; BDOT10k is GUGiK's official topographic database (1:10 000), the one Polish surveying and GIS work uses. [`pvscreen/bdot10k.py`](pvscreen/bdot10k.py) downloads the gmina's powiat package from GUGiK open data and maps its classes to the same rules and buffers as OSM, so `--source bdot10k` changes only where buildings, roads, water and forest come from (the power grid stays OSM: BDOT10k has lines but no substations).
+
+| Rule | OpenStreetMap | BDOT10k |
+|---|---|---|
+| Buildings (50 m) | `building` | BUBD, except destroyed ones |
+| Built-up land | residential, commercial, retail, cemetery, allotments | PTZB single-family, multi-family, commercial; KUSC cemeteries; PTUT allotments |
+| Roads (Public Roads Act setbacks) | motorway … residential | SKDR by management category (national, voivodeship, county, municipal); internal roads left out, like OSM service and track ways |
+| Railways | rail | SKTR |
+| Water / watercourses | water, reservoir / river, canal, stream | PTWP / SWRS, SWKN |
+| Forest (15 m) | forest, wood | PTLZ: forest, young forest, tree groups |
+
+Two quirks of GUGiK's packages are handled in code: the `.prj` is an Esri WKT that GDAL does not match to EPSG:2180, and the `.cpg` files say UTF-8 while the attributes are Windows-1250.
+
+**Przykona, both sources** (`python -m pvscreen.compare_sources 3027062`):
+
+| Excluded (ha) | OSM | BDOT10k |
+|---|---:|---:|
+| Buildings (with 50 m zone) | 1,219 | 1,211 |
+| Built-up land | 58 | 290 |
+| Forest (with 15 m) | 3,330 | 3,613 |
+| Roads (with setbacks) | 509 | 397 |
+| Water | 329 | 271 |
+| Watercourses | 56 | 125 |
+| Railways | 0 | 2 |
+| **All (union)** | **5,000** | **5,126** |
+
+| Buildings in the gmina | Count | Missing from the other source | …and outside its 50 m building zone |
+|---|---:|---:|---:|
+| OSM | 4,147 | 578 | 30 |
+| BDOT10k | 3,972 | 200 | 47 |
+
+| Result | OSM | BDOT10k |
+|---|---:|---:|
+| Candidates | 107, 5,634 ha | 135, 5,479 ha |
+| Candidate area only this source finds | 402 ha | 247 ha |
+| Existing farm area inside candidates | 98.0 % (chance 50.9 %, lift 1.93) | 98.3 % (chance 49.5 %, lift 1.99) |
+
+What it shows:
+
+- **The sources agree on 5,232 ha of candidates** and disagree on 650 ha at the edges. The screening's conclusion and its validation barely move: the choice of source is not what drives the result here.
+- **BDOT10k excludes more built-up land, forest and streams.** Its built-up polygons cover whole residential plots, while rural OSM often has no `landuse` there at all (290 vs 58 ha; that reading comes from looking at the layers, not a measurement), and it has 79 stream segments to OSM's 18. OSM has more road setback area (509 vs 397 ha), probably because some streets it calls residential are internal roads in BDOT10k, which no rule excludes.
+- **Neither has every building.** OSM has 578 buildings that BDOT10k lacks, BDOT10k 200 that OSM lacks, but most sit inside the other source's 50 m building zone anyway; only 30 and 47 would end up under a candidate. Nearly all BDOT10k buildings here date from the end of 2023, so recent construction is a plausible reason for many OSM-only buildings (not checked one by one).
+- **Neither comes out clearly better** without ground truth (an orthophoto check of the disputed buildings and parcels would be the next step). BDOT10k is the official, uniformly maintained source and gives a slightly higher validation lift; OSM stays the default because it works the same everywhere and can be fresher.
+
 ### Map in QGIS (issue #9)
 
 [`qgis/make_project.py`](qgis/make_project.py) builds the project with PyQGIS from the pipeline outputs, so the styling is code and reruns for any gmina:
@@ -295,6 +343,7 @@ Opening it is the place to refine the cartography by hand; the script is the rep
 | Digital terrain model (NMT, 1 m grid) | GUGiK | WCS `PZGIK/NMT/GRID1/WCS/DigitalTerrainModelFormatTIFF` |
 | Natura 2000, national and landscape parks, reserves | [GDOŚ](https://sdi.gdos.gov.pl/) | WFS `sdi.gdos.gov.pl/wfs` |
 | Buildings, roads, water, forest, power lines, existing solar farms | © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors | Overpass API |
+| Buildings, roads, water, forest (optional, `--source bdot10k`) | BDOT10k, [GUGiK](https://www.geoportal.gov.pl/) | Open-data Shapefile package per powiat |
 | Solar irradiance and temperature | [NASA POWER](https://power.larc.nasa.gov/) | REST API |
 
 All processing happens in **PL-1992 (EPSG:2180)**; final outputs are also offered in the matching **PL-2000** zone (EPSG:2176–2179).

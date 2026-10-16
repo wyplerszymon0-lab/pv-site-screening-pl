@@ -177,20 +177,39 @@ class Inputs:
     constraints: gpd.GeoDataFrame
 
 
-def load_inputs(gmina: gpd.GeoDataFrame) -> Inputs:
-    """Read every input layer of one gmina (from the caches, downloading if needed)."""
+SOURCES = ("osm", "bdot10k")
+
+
+def exclusion_features(gmina: gpd.GeoDataFrame, source: str = "osm") -> gpd.GeoDataFrame:
+    """Buildings, roads, water, forest... from OpenStreetMap or BDOT10k, keyed by osm.RULES."""
+    from pvscreen import bdot10k, osm
+
+    if source == "osm":
+        return osm.elements_to_gdf(osm.fetch_elements(gmina))
+    if source == "bdot10k":
+        return bdot10k.features(gmina)
+    raise ValueError(f"unknown source {source!r}; expected one of {SOURCES}")
+
+
+def load_inputs(gmina: gpd.GeoDataFrame, source: str = "osm") -> Inputs:
+    """Read every input layer of one gmina (from the caches, downloading if needed).
+
+    source picks where buildings, roads, water and forest come from; the power grid
+    always comes from OpenStreetMap (BDOT10k has no substations).
+    """
     from pvscreen import osm, protected, terrain
 
     dem, transform = terrain.fetch_dem(gmina)
     slope, aspect = terrain.slope_aspect(dem, terrain.DEFAULT_RES_M)
     feats = osm.elements_to_gdf(osm.fetch_elements(gmina))
+    excl_feats = feats if source == "osm" else exclusion_features(gmina, source)
     areas = protected.protected_areas(gmina)
     return Inputs(
         slope=slope,
         aspect=aspect,
         transform=transform,
         inside=terrain.gmina_mask(gmina, dem.shape, transform),
-        exclusions=list(osm.exclusions(feats, gmina).geometry)
+        exclusions=list(osm.exclusions(excl_feats, gmina).geometry)
         + list(areas[areas["kind"] == protected.EXCLUDE].geometry),
         grid=osm.grid(feats, gmina),
         constraints=areas[areas["kind"] == protected.CONSTRAINT],

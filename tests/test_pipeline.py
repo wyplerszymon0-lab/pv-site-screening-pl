@@ -154,3 +154,20 @@ def test_outputs_skip_map_layers_that_are_missing(tmp_path):
 
     assert {name for name, _ in pyogrio.list_layers(path)} == {"boundary", "exclusions", "candidates"}
     assert not (path.parent / "slope.tif").exists()
+
+
+def test_bdot10k_runs_are_labelled_and_kept_apart(tmp_path):
+    r = result()
+    r.source = "bdot10k"
+    path, _ = pipeline.write_outputs(r, out_root=tmp_path)
+    assert path.name == "screening_bdot10k.gpkg"
+    md = pipeline.render_report(r, path, "EPSG:2180")
+    assert "- BDOT10k (buildings, roads, water, forest, built-up land, with buffers)" in md
+    assert "Buildings, roads, water and forest: BDOT10k (GUGiK)." in md
+
+
+def test_unknown_source_is_rejected():
+    from pvscreen.suitability import exclusion_features
+
+    with pytest.raises(ValueError, match="unknown source"):
+        exclusion_features(result().gmina, "googlemaps")
