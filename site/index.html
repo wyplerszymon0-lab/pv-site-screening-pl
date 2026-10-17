@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PV Site Screening — interactive map</title>
+  <meta name="description" content="Candidate areas for ground-mounted solar farms in a Polish gmina, screened from open data (PRG, NMT, GDOŚ, OpenStreetMap).">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div>
+      <h1>PV Site Screening <span id="gmina-name"></span></h1>
+      <p id="summary">Loading…</p>
+    </div>
+    <nav>
+      <select id="gmina-select" aria-label="Gmina"></select>
+      <a href="https://github.com/wyplerszymon0-lab/pv-site-screening-pl">Code &amp; method</a>
+      <a id="report-link" href="#">Report</a>
+    </nav>
+  </header>
+  <main>
+    <div id="map" role="application" aria-label="Map of the screening"></div>
+    <aside id="legend" aria-label="Legend"></aside>
+  </main>
+  <footer>
+    A first-pass screening from open data, not a site assessment.
+    Data: boundary PRG (GUGiK); terrain NMT (GUGiK); protected areas GDOŚ; buildings, roads, water, forest,
+    power grid and solar farms © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors (ODbL).
+    <span id="generated"></span>
+  </footer>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
