@@ -99,3 +99,42 @@ def area_difference(gmina: gpd.GeoDataFrame) -> float:
     row = gmina.iloc[0]
     measured_ha = row.geometry.area / 10_000
     return abs(measured_ha - row.official_area_ha) / row.official_area_ha
+
+
+def powiat_request_params(powiat: str) -> dict[str, str]:
+    """WFS 2.0 GetFeature parameters for every gmina of a powiat (4-digit TERYT prefix)."""
+    if not re.fullmatch(r"\d{4}", str(powiat)):
+        raise ValueError(f"{powiat!r} is not a powiat code: expected 4 digits, e.g. 3027")
+    fes = (
+        '<fes:Filter xmlns:fes="http://www.opengis.net/fes/2.0">'
+        '<fes:PropertyIsLike wildCard="*" singleChar="." escapeChar="!">'
+        f"<fes:ValueReference>JPT_KOD_JE</fes:ValueReference><fes:Literal>{powiat}*</fes:Literal>"
+        "</fes:PropertyIsLike></fes:Filter>"
+    )
+    return {
+        "SERVICE": "WFS",
+        "VERSION": "2.0.0",
+        "REQUEST": "GetFeature",
+        "TYPENAMES": GMINA_LAYER,
+        "FILTER": fes,
+    }
+
+
+def list_gminas(
+    powiat: str, cache_dir: Path = DEFAULT_CACHE, session: requests.Session | None = None
+) -> list[tuple[str, str]]:
+    """(TERYT, name) of every gmina in a powiat, sorted by TERYT, from PRG (cached)."""
+    path = Path(cache_dir) / f"powiat_{powiat}.gml"
+    if not path.exists():
+        http = session or requests.Session()
+        resp = http.get(
+            PRG_WFS_URL, params=powiat_request_params(powiat), headers={"User-Agent": USER_AGENT}, timeout=180
+        )
+        resp.raise_for_status()
+        if b"<wfs:member>" not in resp.content:
+            raise LookupError(f"PRG has no gminas in powiat {powiat}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(resp.content)
+    raw = gpd.read_file(path)
+    pairs = {(str(t), str(n)) for t, n in zip(raw["JPT_KOD_JE"], raw["JPT_NAZWA_"], strict=True)}
+    return sorted(p for p in pairs if _TERYT.fullmatch(p[0]))

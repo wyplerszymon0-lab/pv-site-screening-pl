@@ -34,7 +34,7 @@ def fetch_farm_elements(
     gmina: gpd.GeoDataFrame,
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
-    waits: tuple[float, ...] = (30, 90),
+    waits: tuple[float, ...] = (30, 90, 180),
 ) -> list[dict]:
     teryt = gmina.iloc[0]["teryt"]
     path = Path(cache_dir) / f"solar_farms_{teryt}.json"

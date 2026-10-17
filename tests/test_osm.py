@@ -182,7 +182,7 @@ def gmina_fixture():
 
 
 def test_busy_server_is_retried_then_cached(tmp_path, gmina_fixture):
-    session = FakeSession([(504, None), (429, None), (200, {"elements": [{"type": "node", "id": 1}]})])
+    session = FakeSession([(504, None), (502, None), (200, {"elements": [{"type": "node", "id": 1}]})])
     els = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=(0, 0))
     assert session.calls == 3 and els == [{"type": "node", "id": 1}]
     assert osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=FakeSession([]), waits=(0, 0)) == els

@@ -95,13 +95,16 @@ def build_query(bounds_wgs84: tuple[float, float, float, float]) -> str:
     return f"[out:json][timeout:180];\n(\n{body}\n);\nout geom;"
 
 
-def _post_with_retry(session, query: str, waits=(30, 90)) -> requests.Response:
-    """Overpass answers 429/504 when busy; wait and retry a couple of times."""
+RETRY_STATUS = (429, 502, 503, 504)  # busy, or a gateway in front of an overloaded server
+
+
+def _post_with_retry(session, query: str, waits=(30, 90, 180)) -> requests.Response:
+    """Overpass answers 429/502/503/504 when busy; wait and retry a couple of times."""
     for wait in (*waits, None):
         resp = session.post(
             OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT}, timeout=300
         )
-        if resp.status_code not in (429, 504) or wait is None:
+        if resp.status_code not in RETRY_STATUS or wait is None:
             return resp
         time.sleep(wait)
     raise AssertionError("unreachable")
@@ -111,7 +114,7 @@ def fetch_elements(
     gmina: gpd.GeoDataFrame,
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
-    waits: tuple[float, ...] = (30, 90),
+    waits: tuple[float, ...] = (30, 90, 180),
 ) -> list[dict]:
     teryt = gmina.iloc[0]["teryt"]
     path = Path(cache_dir) / f"osm_{teryt}.json"
