@@ -1,0 +1,17 @@
+{
+  "teryt": "3027062",
+  "name": "Przykona",
+  "generated": "2026-10-17",
+  "pvscreen": "0.1.0",
+  "layers": [
+    "boundary",
+    "candidates",
+    "exclusions",
+    "farms",
+    "power_lines",
+    "substations"
+  ],
+  "candidates": 107,
+  "candidate_area_ha": 5634.3,
+  "gmina_area_ha": 11079.4
+}

@@ -1,5 +1,7 @@
 # PV Site Screening — Poland
 
+**[Interactive map →](https://wyplerszymon0-lab.github.io/pv-site-screening-pl/)** (Przykona: click a candidate area for its score)
+
 **Status: work in progress.** The pipeline below is the plan; each step is tracked as an [issue](https://github.com/wyplerszymon0-lab/pv-site-screening-pl/issues). No results are published until the code that produces them is in the repository.
 
 Where in a Polish municipality (*gmina*) could a ground-mounted solar farm go? This project answers that first-pass question with **open public data only**, the way a GIS analyst would before any site visit:
@@ -19,7 +21,7 @@ A rural gmina in Turek County, Greater Poland. Its land includes the former *Ada
 
 ![Screening map of Przykona: candidate areas by score, exclusions by reason, slope, power grid and existing solar farms](docs/map_3027062.png)
 
-<sub>Exported from the QGIS project in [`qgis/`](qgis/) (see [Map in QGIS](#map-in-qgis-issue-9)). Candidates (orange, darker = better score) cover most of the open land; the steep red patch in the north is the edge of the former Adamów pit, and the black outlines are the solar farms already built.</sub>
+<sub>Exported from the QGIS project in [`qgis/`](qgis/) (see [Map in QGIS](#map-in-qgis-issue-9)); the same layers are on the [interactive map](https://wyplerszymon0-lab.github.io/pv-site-screening-pl/). Candidates (orange, darker = better score) cover most of the open land; the steep red patch in the north is the edge of the former Adamów pit, and the black outlines are the solar farms already built.</sub>
 
 ## Usage
 
@@ -32,6 +34,7 @@ python -m pvscreen --teryt 3027062               # writes outputs/3027062/screen
 python -m pvscreen --teryt 3027022 --crs pl2000  # output in the gmina's PL-2000 zone
 python -m pvscreen --teryt 3027062 --source bdot10k  # exclusions from GUGiK's BDOT10k instead of OSM
 python -m pvscreen.compare_sources 3027062        # compare the two sources
+python -m pvscreen.webmap 3027062                 # GeoJSON for the web map in site/ (published on GitHub Pages)
 
 # Styled QGIS project + exported map (needs QGIS; run with the Python that ships with it)
 "C:\Program Files\QGIS 3.44.14\bin\python-qgis-ltr.bat" qgis/make_project.py 3027062   # Windows
@@ -324,6 +327,10 @@ What it shows:
 - **BDOT10k excludes more built-up land, forest and streams.** Its built-up polygons cover whole residential plots, while rural OSM often has no `landuse` there at all (290 vs 58 ha; that reading comes from looking at the layers, not a measurement), and it has 79 stream segments to OSM's 18. OSM has more road setback area (509 vs 397 ha), probably because some streets it calls residential are internal roads in BDOT10k, which no rule excludes.
 - **Neither has every building.** OSM has 578 buildings that BDOT10k lacks, BDOT10k 200 that OSM lacks, but most sit inside the other source's 50 m building zone anyway; only 30 and 47 would end up under a candidate. Nearly all BDOT10k buildings here date from the end of 2023, so recent construction is a plausible reason for many OSM-only buildings (not checked one by one).
 - **Neither comes out clearly better** without ground truth (an orthophoto check of the disputed buildings and parcels would be the next step). BDOT10k is the official, uniformly maintained source and gives a slightly higher validation lift; OSM stays the default because it works the same everywhere and can be fresher.
+
+### Interactive web map (issue #26)
+
+[`pvscreen/webmap.py`](pvscreen/webmap.py) exports a gmina's layers to GeoJSON for the browser: reprojected to WGS84 after simplifying by 3 m in PL-1992 (well under the 5 m terrain cells), coordinates rounded to about a metre, exclusions dissolved into one feature per group, and only the candidate fields a reader needs. For Przykona that is 954 kB in total. [`site/`](site/) is a static Leaflet page with the QGIS map's colours, layer toggles in the legend and a popup per candidate (score and its parts, slope, distance to the nearest substation, yield). A workflow publishes it to GitHub Pages; the screening itself runs locally, because it downloads gigabytes of terrain tiles.
 
 ### Map in QGIS (issue #9)
 

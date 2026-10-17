@@ -166,8 +166,7 @@ venv.bak/
 # Rope project settings
 .ropeproject
 
-# mkdocs/Zensical documentation
-/site
+# (site/ is the web map, published on GitHub Pages: not ignored)
 
 # mypy
 .mypy_cache/
@@ -225,3 +224,4 @@ outputs/
 *.tif
 *.gpkg
 *.gfs
+!site/data/
