@@ -50,6 +50,15 @@ STATEMENTS = (
     'way["power"="substation"]',
 )
 
+# The grid is fetched separately, with a margin as wide as the distance at which the
+# grid score reaches 0: the nearest substation is often in the next gmina, and the
+# 100 m margin above would hide it (issue #30).
+GRID_STATEMENTS = (
+    'way["power"~"^(line|minor_line|cable)$"]',
+    'node["power"="substation"]',
+    'way["power"="substation"]',
+)
+
 AREA_KEYS = ("building", "landuse", "natural", "power")  # closed ways with these tags are areas
 
 
@@ -86,22 +95,27 @@ RULES = {
 }
 
 
-def build_query(bounds_wgs84: tuple[float, float, float, float]) -> str:
+def build_query(
+    bounds_wgs84: tuple[float, float, float, float], statements: tuple[str, ...] = STATEMENTS
+) -> str:
     west, south, east, north = bounds_wgs84
     bbox = f"{south:.5f},{west:.5f},{north:.5f},{east:.5f}"
-    body = "\n".join(f" {s}({bbox});" for s in STATEMENTS)
+    body = "\n".join(f" {s}({bbox});" for s in statements)
     # Plain "out geom" (body verbosity): "out geom tags" would print relations
     # without their member ways, so multipolygons would have no geometry.
     return f"[out:json][timeout:180];\n(\n{body}\n);\nout geom;"
 
 
-def _post_with_retry(session, query: str, waits=(30, 90)) -> requests.Response:
-    """Overpass answers 429/504 when busy; wait and retry a couple of times."""
+RETRY_STATUS = (429, 502, 503, 504)  # busy, or a gateway in front of an overloaded server
+
+
+def _post_with_retry(session, query: str, waits=(30, 90, 180)) -> requests.Response:
+    """Overpass answers 429/502/503/504 when busy; wait and retry a couple of times."""
     for wait in (*waits, None):
         resp = session.post(
             OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT}, timeout=300
         )
-        if resp.status_code not in (429, 504) or wait is None:
+        if resp.status_code not in RETRY_STATUS or wait is None:
             return resp
         time.sleep(wait)
     raise AssertionError("unreachable")
@@ -111,13 +125,31 @@ def fetch_elements(
     gmina: gpd.GeoDataFrame,
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
-    waits: tuple[float, ...] = (30, 90),
+    waits: tuple[float, ...] = (30, 90, 180),
 ) -> list[dict]:
-    teryt = gmina.iloc[0]["teryt"]
-    path = Path(cache_dir) / f"osm_{teryt}.json"
+    """Every feature the screening uses, around the gmina (bounding box + MARGIN_M)."""
+    return _fetch(
+        gmina, f"osm_{gmina.iloc[0]['teryt']}.json", MARGIN_M, STATEMENTS, cache_dir, session, waits
+    )
+
+
+def fetch_grid_elements(
+    gmina: gpd.GeoDataFrame,
+    margin_m: float,
+    cache_dir: Path = DEFAULT_CACHE,
+    session: requests.Session | None = None,
+    waits: tuple[float, ...] = (30, 90, 180),
+) -> list[dict]:
+    """Power lines and substations within margin_m of the gmina's bounding box."""
+    name = f"osm_grid_{gmina.iloc[0]['teryt']}_{margin_m:.0f}m.json"
+    return _fetch(gmina, name, margin_m, GRID_STATEMENTS, cache_dir, session, waits)
+
+
+def _fetch(gmina, filename, margin_m, statements, cache_dir, session, waits) -> list[dict]:
+    path = Path(cache_dir) / filename
     if not path.exists():
-        bounds = tuple(gmina.to_crs(WORK_CRS).buffer(MARGIN_M).to_crs(4326).total_bounds)
-        resp = _post_with_retry(session or requests.Session(), build_query(bounds), waits)
+        bounds = tuple(gmina.to_crs(WORK_CRS).buffer(margin_m).to_crs(4326).total_bounds)
+        resp = _post_with_retry(session or requests.Session(), build_query(bounds, statements), waits)
         resp.raise_for_status()
         payload = resp.json()
         if payload.get("remark"):  # Overpass reports timeouts and errors here, with HTTP 200

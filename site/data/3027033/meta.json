@@ -1,0 +1,17 @@
+{
+  "teryt": "3027033",
+  "name": "Dobra",
+  "generated": "2026-10-18",
+  "pvscreen": "0.1.0",
+  "layers": [
+    "boundary",
+    "candidates",
+    "exclusions",
+    "farms",
+    "power_lines",
+    "substations"
+  ],
+  "candidates": 110,
+  "candidate_area_ha": 7028.6,
+  "gmina_area_ha": 13177.0
+}

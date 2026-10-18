@@ -34,7 +34,7 @@ def fetch_farm_elements(
     gmina: gpd.GeoDataFrame,
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
-    waits: tuple[float, ...] = (30, 90),
+    waits: tuple[float, ...] = (30, 90, 180),
 ) -> list[dict]:
     teryt = gmina.iloc[0]["teryt"]
     path = Path(cache_dir) / f"solar_farms_{teryt}.json"
@@ -69,12 +69,15 @@ def farms_in_gmina(elements: list[dict], gmina: gpd.GeoDataFrame) -> gpd.GeoData
         if geom is None or geom.geom_type not in ("Polygon", "MultiPolygon"):
             continue
         rows.append({"osm_id": f"{el['type']}/{el['id']}", "name": tags.get("name"), "geometry": geom})
+    empty = gpd.GeoDataFrame(
+        columns=["osm_id", "name", "area_ha", "geometry"], geometry="geometry", crs=WORK_CRS
+    )
     if not rows:
-        return gpd.GeoDataFrame(
-            columns=["osm_id", "name", "area_ha", "geometry"], geometry="geometry", crs=WORK_CRS
-        )
+        return empty
     raw = gpd.GeoDataFrame(rows, geometry="geometry", crs="EPSG:4326").to_crs(WORK_CRS)
     raw = gpd.clip(raw, gmina.to_crs(WORK_CRS)).sort_index()  # clip() order varies between versions
+    if raw.empty:  # farms in the query's bounding box, but all of them outside the gmina
+        return empty
     merged = []
     for part in getattr(unary_union(list(raw.geometry)), "geoms", [unary_union(list(raw.geometry))]):
         members = raw[raw.intersects(part) & (raw.intersection(part).area > 0)]

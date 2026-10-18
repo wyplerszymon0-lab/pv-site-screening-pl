@@ -1,0 +1,17 @@
+{
+  "teryt": "3027011",
+  "name": "Turek",
+  "generated": "2026-10-18",
+  "pvscreen": "0.1.0",
+  "layers": [
+    "boundary",
+    "candidates",
+    "exclusions",
+    "farms",
+    "power_lines",
+    "substations"
+  ],
+  "candidates": 19,
+  "candidate_area_ha": 502.2,
+  "gmina_area_ha": 1614.9
+}

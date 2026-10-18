@@ -1,0 +1,17 @@
+{
+  "teryt": "3027022",
+  "name": "Brudzew",
+  "generated": "2026-10-18",
+  "pvscreen": "0.1.0",
+  "layers": [
+    "boundary",
+    "candidates",
+    "exclusions",
+    "farms",
+    "power_lines",
+    "substations"
+  ],
+  "candidates": 103,
+  "candidate_area_ha": 5117.2,
+  "gmina_area_ha": 11250.8
+}

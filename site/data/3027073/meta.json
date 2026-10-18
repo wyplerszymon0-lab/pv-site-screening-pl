@@ -1,0 +1,16 @@
+{
+  "teryt": "3027073",
+  "name": "Tuliszków",
+  "generated": "2026-10-18",
+  "pvscreen": "0.1.0",
+  "layers": [
+    "boundary",
+    "candidates",
+    "exclusions",
+    "power_lines",
+    "substations"
+  ],
+  "candidates": 112,
+  "candidate_area_ha": 7461.2,
+  "gmina_area_ha": 14945.1
+}
