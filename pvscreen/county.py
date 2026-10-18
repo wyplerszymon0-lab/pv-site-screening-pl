@@ -25,6 +25,18 @@ SCORE_BINS = [0.0, 0.6, 0.7, 0.8, 0.9, 1.01]
 SCORE_COLOURS = ["#ffffd4", "#fee391", "#fec44f", "#fe9929", "#d95f0e"]  # as on the QGIS and web maps
 
 
+GMINA_TYPE = {"1": "town", "2": "rural", "3": "town and rural"}  # last digit of the TERYT code
+
+
+def disambiguate(results: list[pipeline.Result]) -> None:
+    """Name gminas that share a name by their type, e.g. Turek (town) and Turek (rural)."""
+    names = [r.gmina.iloc[0]["name"] for r in results]
+    for r in results:
+        g = r.gmina.iloc[0]
+        if names.count(g["name"]) > 1:
+            r.gmina = r.gmina.assign(name=f"{g['name']} ({GMINA_TYPE.get(g['teryt'][-1], g['teryt'])})")
+
+
 def gmina_row(result: pipeline.Result) -> dict:
     """One gmina's figures for the county table."""
     g = result.gmina.iloc[0]
@@ -174,6 +186,7 @@ def main(argv: list[str] | None = None) -> int:
             webmap.export(teryt)
         results.append(result)
 
+    disambiguate(results)
     table = county_table([gmina_row(r) for r in results])
     report = Path("reports") / f"powiat_{args.powiat}.md"
     report.write_text(render_markdown(args.powiat, table), encoding="utf-8")

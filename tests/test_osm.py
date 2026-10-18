@@ -193,3 +193,31 @@ def test_overpass_error_remark_is_raised_and_not_cached(tmp_path, gmina_fixture)
     with pytest.raises(RuntimeError, match="timed out"):
         osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=())
     assert not list(tmp_path.iterdir())
+
+
+def test_grid_is_fetched_as_far_beyond_the_gmina_as_the_grid_score_reaches(tmp_path, gmina_fixture):
+    import re
+
+    from pvscreen.suitability import load_config
+
+    queries = []
+
+    class Recording(FakeSession):
+        def post(self, url, data=None, headers=None, timeout=None):
+            queries.append(data["data"])
+            return super().post(url, data, headers, timeout)
+
+    margin = load_config().grid_zero_at_m
+    session = Recording([(200, {"elements": []}), (200, {"elements": []})])
+    osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=())
+    osm.fetch_grid_elements(gmina_fixture, margin, cache_dir=tmp_path, session=session, waits=())
+
+    def south_north(q):
+        s, _, n, _ = map(float, re.search(r"\(([\d.]+),([\d.]+),([\d.]+),([\d.]+)\);", q).groups())
+        return s, n
+
+    (s1, n1), (s2, n2) = south_north(queries[0]), south_north(queries[1])
+    assert (s1 - s2) * 111_000 == pytest.approx(margin - osm.MARGIN_M, rel=0.02)  # 1° latitude ≈ 111 km
+    assert (n2 - n1) * 111_000 == pytest.approx(margin - osm.MARGIN_M, rel=0.02)
+    assert "power" in queries[1] and "building" not in queries[1]
+    assert (tmp_path / f"osm_grid_3027062_{margin:.0f}m.json").exists()

@@ -1,0 +1,16 @@
+{
+  "teryt": "3027092",
+  "name": "Władysławów",
+  "generated": "2026-10-18",
+  "pvscreen": "0.1.0",
+  "layers": [
+    "boundary",
+    "candidates",
+    "exclusions",
+    "power_lines",
+    "substations"
+  ],
+  "candidates": 109,
+  "candidate_area_ha": 4214.4,
+  "gmina_area_ha": 9059.6
+}

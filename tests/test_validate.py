@@ -134,3 +134,14 @@ def test_a_farm_mapped_twice_counts_once():
     assert sorted(farms["area_ha"].round(3)) == [2.0, 8.0]
     site = farms[farms["area_ha"].round(3) == 8.0].iloc[0]
     assert site["name"] == "Whole site" and set(site["osm_id"].split(";")) == {"way/1", "way/2"}
+
+
+def test_farms_only_outside_the_gmina_give_an_empty_table():
+    # The Overpass query covers the gmina's bounding box, so it can return farms
+    # that all lie in a neighbouring gmina (Kawęczyn, Tuliszków, Władysławów).
+    gmina = gpd.GeoDataFrame(
+        {"teryt": ["0000002"]}, geometry=[box(400_000, 400_000, 401_000, 401_000)], crs="EPSG:2180"
+    )
+    tags = {"power": "plant", "plant:source": "solar"}
+    farms = validate.farms_in_gmina([osm_way(1, tags, (1500, 1500, 1700, 1700))], gmina)
+    assert farms.empty and list(farms.columns) == ["osm_id", "name", "area_ha", "geometry"]

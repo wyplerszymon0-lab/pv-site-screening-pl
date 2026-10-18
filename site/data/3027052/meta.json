@@ -1,0 +1,17 @@
+{
+  "teryt": "3027052",
+  "name": "Malanów",
+  "generated": "2026-10-18",
+  "pvscreen": "0.1.0",
+  "layers": [
+    "boundary",
+    "candidates",
+    "exclusions",
+    "farms",
+    "power_lines",
+    "substations"
+  ],
+  "candidates": 139,
+  "candidate_area_ha": 4824.3,
+  "gmina_area_ha": 10708.4
+}

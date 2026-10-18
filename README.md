@@ -129,7 +129,7 @@ Power lines and substations are not exclusions but a separate **grid** layer for
 | Built-up land | 58 ha | 0.5 % |
 | **All OSM exclusions (union)** | **5 000 ha** | **45.1 %** |
 
-Grid within reach: 67 power lines (51 at 110 kV, 16 at 220 kV, a few medium-voltage) and 9 substations.
+Grid: within the gmina's bounding box 67 power lines and 9 substations. Since issue #30 the grid is fetched separately, 10 km beyond the box (as far as the grid score reaches), which gives 167 lines (61 at 110 kV, 16 at 220 kV, 84 medium-voltage) and 24 substations for Przykona.
 
 One bug was caught by checking the result rather than trusting it: the first version printed relations without their member ways (`out geom tags` instead of `out geom`), so all multipolygons were silently dropped, among them a 2 734 ha forest and two reservoirs of 139 and 106 ha (flooded mine pits). The exclusion share went from 26 % to 45 % once they were in. A test now checks that a relation without members is skipped and that the query asks for member geometry.
 
@@ -152,9 +152,9 @@ The grid criterion uses the distance to the nearest **substation**, not to the n
 | Candidates | 107 |
 | Total area | 5 634 ha (51 % of the gmina) |
 | Area per candidate | 2 – 965 ha (median 17 ha) |
-| Score | 0.53 – 0.98 (median 0.84) |
-| Distance to a substation | 0 – 9.0 km (median 2.3 km) |
-| Candidates scoring ≥ 0.8 | 64, covering 3 562 ha |
+| Score | 0.70 – 0.98 (median 0.84) |
+| Distance to a substation | 0 – 5.5 km (median 2.3 km) |
+| Candidates scoring ≥ 0.8 | 65, covering 3 582 ha |
 | Mostly in the *Uniejowski* protected landscape area (constraint) | 11, covering 741 ha |
 
 **What this does not see.** Half of the gmina passing a screening is mostly a statement about its flat, open farmland, not about where farms can actually be built. Two things decide a lot of that and are not in open data for a whole gmina: the **agricultural soil class** of each plot (the best classes are protected from development) and the **local zoning plan** (MPZP) or its absence. Existing solar farms are deliberately not excluded, so that issue #6 can check whether they fall inside the candidates.
@@ -170,15 +170,15 @@ Ground-mounted solar farms in OpenStreetMap (`power=plant` + `plant:source=solar
 | Expected by chance (candidates' share of the gmina) | 50.9 % |
 | Ratio (lift) | 1.93 (the maximum possible here is 1 / 0.509 = 1.96) |
 | Farms mostly (≥ 50 %) inside candidates | 19 of 19 |
-| Mean score of candidate land under farms / of all candidate land | 0.953 / 0.860 |
-| … without substations within 500 m of a farm | 0.879 / 0.761 |
+| Mean score of candidate land under farms / of all candidate land | 0.953 / 0.861 |
+| … without substations within 500 m of a farm | 0.879 / 0.764 |
 
 **How to read this.** The screening removes almost no land where farms were actually built: not one farm was cut out by a building buffer, forest, slope or Natura 2000. Within the candidates, farm land scores about 0.1 higher than the average.
 
 Three things make this weaker than it looks:
 
 1. **The data comes after the fact.** OpenStreetMap shows the land as it is now. A farm replaced whatever stood there before, so the farm's own area is no longer mapped as forest or buildings. Most farms in Przykona sit on the reclaimed *Adamów* mine.
-2. **Farms bring their own substations.** 5 of the 9 substations lie within 31 m of a farm, which makes the farms' surroundings score well on the grid criterion. Leaving those substations out lowers every score but keeps the gap between farm land and other candidate land (0.879 vs 0.761), so the farms are also closer to the grid that was there anyway.
+2. **Farms bring their own substations.** 5 of the 9 substations in the gmina lie within 31 m of a farm, which makes the farms' surroundings score well on the grid criterion. Leaving those substations out lowers every score but keeps the gap between farm land and other candidate land (0.879 vs 0.764), so the farms are also closer to the grid that was there anyway.
 3. **High recall is easy when half the gmina is a candidate.** This shows that the exclusions do not throw away buildable land, not that the screening pinpoints where farms go.
 
 A sharper test would screen the land as it was before the farms were built (OpenStreetMap history). The neighbouring gminas, below, are a second check.
@@ -266,6 +266,30 @@ ORDER BY area_ha DESC
 The two agree to 0.9 % in area; the symmetric difference is 1.5 % of their union. No candidate exists in one version only. The count differs because the raster version splits three areas into eight: its stair-stepped edges make a few narrow necks slightly narrower, and the 30 m strip filter then cuts them.
 
 The tests run the SQL on a real PostGIS (a service container in CI, `docker compose` locally): a road across a square leaves two 7.2 ha halves, a 20 m strip and a 1 ha piece are dropped, both tables get GiST indexes. One of them caught a bug the demo gmina never hit: with no exclusion zone touching the terrain, the empty fallback polygon had SRID 0 and PostGIS refused the difference.
+
+### A whole powiat (issue #27)
+
+`python -m pvscreen.county 3027` asks PRG for every gmina of powiat turecki, screens each one and writes [`reports/powiat_3027.md`](reports/powiat_3027.md) and the overview map below; with `--webmap` all nine gminas are also on the [interactive map](https://wyplerszymon0-lab.github.io/pv-site-screening-pl/) (pick one in the header).
+
+![Candidate areas in powiat turecki, coloured by score](docs/powiat_3027.png)
+
+| Gmina | Candidate area | Share | Score ≥ 0.9 | Median distance to a substation | Farms (ha) | Lift |
+|---|---:|---:|---:|---:|---:|---:|
+| Turek (town) | 502 ha | 31 % | 495 ha | 0.5 km | 2 (3) | 1.53 |
+| Turek (rural) | 4,996 ha | 46 % | 1,418 ha | 2.9 km | 4 (13) | 2.15 |
+| Przykona | 5,634 ha | 51 % | 2,289 ha | 2.3 km | 19 (413) | 1.93 |
+| Brudzew | 5,117 ha | 45 % | 874 ha | 4.5 km | 4 (121) | 1.59 |
+| Malanów | 4,824 ha | 45 % | 0 | 7.8 km | 1 (1) | 2.22 |
+| Dobra | 7,029 ha | 53 % | 0 | 8.2 km | 3 (4) | 1.80 |
+| Tuliszków | 7,461 ha | 50 % | 0 | 8.3 km | – | – |
+| Władysławów | 4,214 ha | 47 % | 0 | 9.6 km | – | – |
+| Kawęczyn | 6,600 ha | 65 % | 0 | 10.0 km | – | – |
+| **Powiat** | **46,378 ha** | **50 %** | **5,076 ha** | | **33 (555)** | **1.86** |
+
+- **Half of the powiat passes the exclusions; the grid decides where the good land is.** All 5,076 ha scoring 0.9 or more lie in the four gminas around Turek and the former Adamów mine and power station, where most substations are. In the five outer gminas the median candidate is 7.8 – 10 km from a substation and no candidate scores above 0.84.
+- **Pooled over the powiat, 92.2 % of the area of the 33 existing farms lies in candidates, against 49.5 % by chance** (lift 1.86). It is the same caveat as for Przykona: 413 of the 555 ha are in Przykona, and three gminas have no farm to check.
+- **Screening many gminas found a bug that one could not.** The grid used to come from the same query as the exclusions, the gmina's bounding box plus 100 m, so a substation just over the border was invisible. Przykona has substations of its own and showed nothing wrong; Dobra, Kawęczyn, Tuliszków and Władysławów have none inside their box, and every one of their candidates got a grid score of 0. The grid is now fetched 10 km beyond the box (issue #30), which also brought Przykona's farthest candidate from 9.0 to 5.5 km from a substation.
+- A second bug surfaced the same way: three gminas have OpenStreetMap solar farms in their bounding box but none inside the gmina, which crashed the validation; that case is now handled and tested.
 
 ### One command for any gmina (issue #11)
 

@@ -1,0 +1,16 @@
+{
+  "teryt": "3027042",
+  "name": "Kawęczyn",
+  "generated": "2026-10-18",
+  "pvscreen": "0.1.0",
+  "layers": [
+    "boundary",
+    "candidates",
+    "exclusions",
+    "power_lines",
+    "substations"
+  ],
+  "candidates": 68,
+  "candidate_area_ha": 6599.8,
+  "gmina_area_ha": 10091.4
+}

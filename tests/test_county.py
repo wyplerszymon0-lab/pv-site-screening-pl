@@ -82,3 +82,13 @@ def test_overview_map_is_written(tmp_path):
     ]
     png = county.overview_map(results, tmp_path / "map.png", "Test")
     assert png.exists() and png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_gminas_sharing_a_name_are_told_apart_by_type():
+    results = [
+        result("3027011", "Turek", 0, [(1.0, 0.5)]),
+        result("3027082", "Turek", 2000, [(1.0, 0.5)]),
+        result("3027062", "Przykona", 4000, [(1.0, 0.5)]),
+    ]
+    county.disambiguate(results)
+    assert [r.gmina.iloc[0]["name"] for r in results] == ["Turek (town)", "Turek (rural)", "Przykona"]
