@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import rasterio
 
-from pvscreen import WORK_CRS, __version__, crs, osm, protected, terrain, validate
+from pvscreen import WORK_CRS, crs, osm, protected, terrain, validate
 from pvscreen.boundary import fetch_gmina
 from pvscreen.energy import add_energy
 from pvscreen.suitability import Config, exclusion_features, load_config, load_inputs, screen
@@ -102,104 +102,10 @@ def write_outputs(
     return path, note
 
 
-SOURCE_NAMES = {"osm": "OpenStreetMap", "bdot10k": "BDOT10k"}
+def render_report(
+    result: Result, gpkg: Path, crs_note: str, today: date | None = None, lang: str = "en"
+) -> str:
+    """The Markdown report, in English or Polish (see pvscreen.report)."""
+    from pvscreen import report
 
-
-def _pct(x: float) -> str:
-    return f"{100 * x:.1f} %"
-
-
-def render_report(result: Result, gpkg: Path, crs_note: str, today: date | None = None) -> str:
-    g = result.gmina.iloc[0]
-    area_ha = result.gmina.to_crs(WORK_CRS).geometry.area.sum() / 10_000
-    c, cfg = result.candidates, result.cfg
-    osm_union = osm.summarize(result.osm_zones, result.gmina).iloc[-1] if not result.osm_zones.empty else None
-    excl = result.protected_areas[result.protected_areas["kind"] == protected.EXCLUDE]
-    cons = result.protected_areas[result.protected_areas["kind"] == protected.CONSTRAINT]
-
-    lines = [
-        f"# Solar-farm screening: gmina {g['name']} (TERYT {g['teryt']})",
-        "",
-        f"_Generated {(today or date.today()).isoformat()} by `python -m pvscreen` (pvscreen {__version__}). "
-        "A first-pass screening from open data, not a site assessment._",
-        "",
-        "## Gmina",
-        "",
-        f"- Area: {area_ha:,.0f} ha (official {g['official_area_ha']:,.0f} ha)",
-        f"- Output: `{gpkg.as_posix()}`, {crs_note}",
-        "",
-        "## Thresholds",
-        "",
-        "| Setting | Value |",
-        "|---|---:|",
-        f"| Maximum slope | {cfg.max_slope_deg:g}° |",
-        f"| Minimum candidate area | {cfg.min_area_ha:g} ha |",
-        f"| Narrowest strip kept | {2 * cfg.min_half_width_m:g} m |",
-        f"| Weights: slope / aspect / grid | {cfg.weight_slope:g} / {cfg.weight_aspect:g} / {cfg.weight_grid:g} |",
-        f"| Grid score reaches 0 at | {cfg.grid_zero_at_m / 1000:g} km from a substation |",
-        f"| Capacity / system losses | {cfg.mwp_per_ha:g} MWp per ha / {cfg.system_loss_pct:g} % |",
-        "",
-        "Sources and reasons for every value: `pvscreen/screening.toml`.",
-        "",
-        "## Exclusions",
-        "",
-        f"- {SOURCE_NAMES[result.source]} (buildings, roads, water, forest, built-up land, with buffers): "
-        + (
-            f"{osm_union['area_ha']:,.0f} ha, {_pct(osm_union['share_of_gmina'])} of the gmina"
-            if osm_union is not None
-            else "none"
-        ),
-        "- Protected nature areas excluded: "
-        + (", ".join(f"{r.name} ({r.category}, {r.area_ha:,.0f} ha)" for r in excl.itertuples()) or "none"),
-        "- Protected areas kept as constraints: "
-        + (", ".join(f"{r.name} ({r.category}, {r.area_ha:,.0f} ha)" for r in cons.itertuples()) or "none"),
-        "",
-        "## Candidates",
-        "",
-    ]
-    if c.empty:
-        lines += ["No area passes the screening.", ""]
-    else:
-        lines += [
-            f"{len(c)} candidates, {c['area_ha'].sum():,.0f} ha ({_pct(c['area_ha'].sum() / area_ha)} of the gmina), "
-            f"{c['capacity_mwp'].sum():,.0f} MWp, about {c['energy_mwh_year'].sum() / 1000:,.0f} GWh per year "
-            "if every hectare were built (a theoretical upper bound). "
-            f"Yield {c['yield_kwh_per_kwp'].min():,.0f} – {c['yield_kwh_per_kwp'].max():,.0f} kWh/kWp.",
-            "",
-            "| Rank | Area (ha) | Score | Mean slope | Substation | In protected landscape | Energy (MWh/yr) |",
-            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
-        ]
-        for r in c.head(10).itertuples():
-            lines.append(
-                f"| {r.rank} | {r.area_ha:,.1f} | {r.score:.2f} | {r.mean_slope_deg:.1f}° | "
-                f"{r.substation_distance_m / 1000:.1f} km | {_pct(r.constraint_share)} | {r.energy_mwh_year:,.0f} |"
-            )
-        lines.append("")
-    lines += ["## Existing solar farms", ""]
-    if result.validation is None:
-        lines += [
-            "OpenStreetMap maps no solar farm of at least 1 ha in this gmina, so there is nothing to check.",
-            "",
-        ]
-    else:
-        v = result.validation
-        lines += [
-            f"{v['farms']} farms ({v['farm_area_ha']:,.0f} ha). {_pct(v['farm_area_in_candidates'])} of their area "
-            f"lies in candidates, against {_pct(v['expected_by_chance'])} expected by chance "
-            f"(lift {v['lift']:.2f}); {v['farms_mostly_inside']} of {v['farms']} are mostly inside. "
-            "See the README for why this is weaker evidence than it looks.",
-            "",
-        ]
-    lines += [
-        "## Data",
-        "",
-        "Boundary: PRG (GUGiK). Terrain: NMT (GUGiK). Protected areas: GDOŚ. "
-        + (
-            "Buildings, roads, water and forest: BDOT10k (GUGiK). Power grid and solar farms: "
-            if result.source == "bdot10k"
-            else "Buildings, roads, water, forest, power grid and solar farms: "
-        )
-        + "© OpenStreetMap contributors, ODbL. Climate: NASA POWER.",
-        "",
-    ]
-    return "\n".join(lines)
+    return report.render(result, gpkg, crs_note, today, lang)

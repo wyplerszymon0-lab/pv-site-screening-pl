@@ -39,7 +39,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 # the Markdown report template: its lines are report text, not code
-"pvscreen/pipeline.py" = ["E501"]
+"pvscreen/report.py" = ["E501"]
 
 [tool.mypy]
 files = ["pvscreen"]
