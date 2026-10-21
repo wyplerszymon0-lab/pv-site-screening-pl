@@ -33,6 +33,7 @@ pytest
 python -m pvscreen --teryt 3027062               # writes outputs/3027062/screening.gpkg and reports/3027062.md
 python -m pvscreen --teryt 3027022 --crs pl2000  # output in the gmina's PL-2000 zone
 python -m pvscreen --teryt 3027062 --source bdot10k  # exclusions from GUGiK's BDOT10k instead of OSM
+python -m pvscreen --teryt 3027062 --lang pl         # the report in Polish: reports/3027062_pl.md
 python -m pvscreen.compare_sources 3027062        # compare the two sources
 python -m pvscreen.webmap 3027062                 # GeoJSON for the web map in site/ (published on GitHub Pages)
 
@@ -41,7 +42,7 @@ python -m pvscreen.webmap 3027062                 # GeoJSON for the web map in s
 python3 qgis/make_project.py 3027062                                                      # Linux/macOS
 ```
 
-Reports: **[Przykona](reports/3027062.md)** (the demo gmina) and its four neighbours **[Brudzew](reports/3027022.md)**, **[Dobra](reports/3027033.md)**, **[Uniejów](reports/1011043.md)** and **[Turek](reports/3027082.md)**, all run with the same command.
+Reports: **[Przykona](reports/3027062.md)** (the demo gmina; also [in Polish](reports/3027062_pl.md)) and its four neighbours **[Brudzew](reports/3027022.md)**, **[Dobra](reports/3027033.md)**, **[Uniejów](reports/1011043.md)** and **[Turek](reports/3027082.md)**, all run with the same command.
 
 The individual steps can also be run on their own:
 
