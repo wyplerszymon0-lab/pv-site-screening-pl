@@ -2,9 +2,9 @@ import re
 from pathlib import Path
 
 import pytest
+from test_pipeline import result  # pytest puts tests/ on sys.path (no package)
 
 from pvscreen import report
-from tests.test_pipeline import result
 
 
 def numbers(md: str, lang: str) -> list[float]:
