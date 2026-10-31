@@ -125,3 +125,71 @@ def test_add_energy_turns_hectares_into_megawatt_hours(tmp_path):
     assert row.capacity_mwp == 4.0
     assert row.energy_mwh_year == pytest.approx(4.0 * row.yield_kwh_per_kwp)
     assert row.yield_kwh_per_kwp == pytest.approx(E.optimal_tilt(clim("warsaw"), 52.2)[1], rel=1e-6)
+
+
+# ─── Year-to-year variability ───
+
+MONTHLY = FIXTURES / "nasa-power-monthly-warsaw.json"  # 2001–2025, same file as Solar Site Intelligence
+
+
+def warsaw_years():
+    return E.parse_power_monthly(json.loads(MONTHLY.read_text()))
+
+
+def test_monthly_series_matches_the_javascript_model():
+    # solar-model.js (Solar Site Intelligence 211e3f9): yearlyYields(…, 52.23, 35, 180) and exceedance().
+    y = E.yearly_yields(warsaw_years(), 52.23, 35, 180)
+    assert (min(y), max(y), len(y)) == (2001, 2025, 25)
+    assert y[2001] == pytest.approx(913.6572429944416, rel=1e-9)
+    assert y[2010] == pytest.approx(957.5030259447411, rel=1e-9)
+    e = E.exceedance(y.values())
+    assert e.p50 == pytest.approx(989.8756541452416, rel=1e-9)
+    assert e.sd == pytest.approx(41.893377838131315, rel=1e-9)
+    assert e.p90 == pytest.approx(936.1851011078925, rel=1e-9)
+    assert e.p90_empirical == pytest.approx(931.543978021216, rel=1e-9)
+
+
+def test_incomplete_years_are_dropped_and_too_few_years_rejected():
+    payload = json.loads(MONTHLY.read_text())
+    payload["properties"]["parameter"]["ALLSKY_SFC_SW_DIFF"]["202507"] = -999.0
+    del payload["properties"]["parameter"]["T2M"]["200302"]
+    years = E.parse_power_monthly(payload)
+    assert len(years) == 23 and 2025 not in years and 2003 not in years
+    for name in payload["properties"]["parameter"]:
+        payload["properties"]["parameter"][name] = {
+            k: v for k, v in payload["properties"]["parameter"][name].items() if k < "200601"
+        }
+    with pytest.raises(ValueError, match="4 complete years"):
+        E.parse_power_monthly(payload)
+
+
+def test_exceedance_by_hand():
+    e = E.exceedance(range(1, 11))
+    assert e.p50 == 5.5 and e.sd == pytest.approx(3.0276503540974917)
+    assert e.p90 == pytest.approx(5.5 - 1.2816 * e.sd)
+    assert e.p90_empirical == pytest.approx(1.9)
+    with pytest.raises(ValueError):
+        E.exceedance([5.0])
+
+
+def test_monthly_series_is_cached_per_cell_and_asks_for_whole_years(tmp_path):
+    session = FakeSession(MONTHLY.read_text())
+    a = E.fetch_monthly(52.2312, 21.0061, 2025, tmp_path, session)
+    b = E.fetch_monthly(52.2449, 20.9733, 2025, tmp_path, session)
+    assert a == b and len(session.calls) == 1
+    assert session.calls[0]["start"] == "2001" and session.calls[0]["end"] == "2025"
+    assert (tmp_path / "power_monthly_52.2_21.0_2001-2025.json").exists()
+
+
+def test_add_energy_adds_p90_when_asked(tmp_path):
+    (tmp_path / "power_52.2_21.0.json").write_text((FIXTURES / "nasa-power-warsaw.json").read_text())
+    (tmp_path / "power_monthly_52.2_21.0_2001-2025.json").write_text(MONTHLY.read_text())
+    x, y = Transformer.from_crs(4326, 2180, always_xy=True).transform(21.0, 52.2)
+    cands = gpd.GeoDataFrame(
+        {"area_ha": [4.0]}, geometry=[box(x - 100, y - 100, x + 100, y + 100)], crs="EPSG:2180"
+    )
+    plain = E.add_energy(cands, 1.0, cache_dir=tmp_path, session=FakeSession("{}"))
+    assert "energy_p90_mwh_year" not in plain
+    row = E.add_energy(cands, 1.0, cache_dir=tmp_path, session=FakeSession("{}"), last_year=2025).iloc[0]
+    assert 0.92 < row.yield_p90_kwh_per_kwp / row.yield_kwh_per_kwp < 0.96  # Warsaw: about 5 % below
+    assert row.energy_p90_mwh_year == pytest.approx(4.0 * row.yield_p90_kwh_per_kwp)

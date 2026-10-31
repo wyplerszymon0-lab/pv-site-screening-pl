@@ -47,6 +47,8 @@ CANDIDATE_FIELDS = {
     "constraint_share": 2,
     "yield_kwh_per_kwp": 0,
     "energy_mwh_year": 0,
+    "yield_p90_kwh_per_kwp": 0,
+    "energy_p90_mwh_year": 0,
 }
 
 

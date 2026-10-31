@@ -45,7 +45,10 @@ def run(teryt: str, cfg: Config | None = None, source: str = "osm") -> Result:
     cfg = cfg or load_config()
     gmina = fetch_gmina(teryt)
     inputs = load_inputs(gmina, source)
-    candidates = add_energy(screen(gmina, cfg, inputs=inputs), cfg.mwp_per_ha, cfg.system_loss_pct / 100)
+    candidates = add_energy(
+        screen(gmina, cfg, inputs=inputs), cfg.mwp_per_ha, cfg.system_loss_pct / 100,
+        last_year=date.today().year - 1,  # P90 from every complete year since 2001
+    )
 
     feats = exclusion_features(gmina, source)
     farms = validate.farms_in_gmina(validate.fetch_farm_elements(gmina), gmina)
