@@ -31,6 +31,12 @@ HOUR_ANGLES = np.arange(-180, 180, 0.5) * DEG  # the same 0.5° steps as the Jav
 
 DEFAULT_CACHE = Path("data/nasa_power")
 POWER_URL = "https://power.larc.nasa.gov/api/temporal/climatology/point"
+MONTHLY_URL = "https://power.larc.nasa.gov/api/temporal/monthly/point"
+# Year-to-year series: 2001 is where NASA POWER's CERES-based irradiance starts (the
+# source of the climatology too); earlier years come from another satellite product.
+FIRST_SERIES_YEAR = 2001
+MIN_SERIES_YEARS = 10
+Z_P90 = 1.2816  # standard normal: 10 % of the distribution lies below mean - 1.2816 sigma
 
 
 @dataclass(frozen=True)
@@ -173,29 +179,131 @@ def fetch_climatology(
     return parse_power_climatology(json.loads(path.read_text(encoding="utf-8")))
 
 
+# ─── Year-to-year variability (port of solar-model.js) ───
+
+
+def parse_power_monthly(payload: dict) -> dict[int, Climatology]:
+    """NASA POWER monthly values → one climatology-shaped entry per complete year.
+
+    Years with a month missing (fill value -999, or not published yet) are left out.
+    """
+    p = payload.get("properties", {}).get("parameter", {})
+    names = ("ALLSKY_SFC_SW_DWN", "ALLSKY_SFC_SW_DIFF", "T2M")
+    years = sorted({int(k[:4]) for k in p.get("ALLSKY_SFC_SW_DWN", {})})
+    series = {}
+    for y in years:
+        cols = [[p.get(name, {}).get(f"{y}{m:02d}") for m in range(1, 13)] for name in names]
+        if all(isinstance(v, int | float) and v > -900 for col in cols for v in col):
+            series[y] = Climatology(*(tuple(float(v) for v in col) for col in cols))
+    if len(series) < MIN_SERIES_YEARS:
+        raise ValueError(
+            f"NASA POWER returned {len(series)} complete years for this location; "
+            f"at least {MIN_SERIES_YEARS} are needed"
+        )
+    return series
+
+
+def fetch_monthly(
+    lat: float,
+    lon: float,
+    last_year: int,
+    cache_dir: Path = DEFAULT_CACHE,
+    session: requests.Session | None = None,
+) -> dict[int, Climatology]:
+    """Monthly series from FIRST_SERIES_YEAR to last_year, cached per 0.1° cell like the climatology."""
+    lat, lon = round(lat, 1), round(lon, 1)
+    path = Path(cache_dir) / f"power_monthly_{lat:.1f}_{lon:.1f}_{FIRST_SERIES_YEAR}-{last_year}.json"
+    if not path.exists():
+        params = {**power_params(lat, lon), "start": str(FIRST_SERIES_YEAR), "end": str(last_year)}
+        resp = (session or requests.Session()).get(
+            MONTHLY_URL, params=params, headers={"User-Agent": USER_AGENT}, timeout=120
+        )
+        resp.raise_for_status()
+        parse_power_monthly(resp.json())  # validate before caching
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(resp.text, encoding="utf-8")
+    return parse_power_monthly(json.loads(path.read_text(encoding="utf-8")))
+
+
+def yearly_yields(
+    series: dict[int, Climatology],
+    lat: float,
+    tilt: float,
+    compass_az: float,
+    opts: ModelOptions | None = None,
+) -> dict[int, float]:
+    """Annual yield (kWh/kWp) of each year, the same model at one orientation."""
+    return {y: monthly_yield(c, lat, tilt, compass_az, opts)["annual"] for y, c in series.items()}
+
+
+@dataclass(frozen=True)
+class Exceedance:
+    n: int
+    mean: float
+    sd: float
+    cov: float
+    p50: float
+    p90: float
+    p90_empirical: float
+    min: float
+    max: float
+
+
+def exceedance(values) -> Exceedance:
+    """Spread across years. P50 = mean and P90 = mean - 1.2816 sigma (normal approximation,
+    sample sigma), the usual convention in PV energy assessments; the empirical 10th
+    percentile is given as a check. Weather only: the model's and the satellite data's
+    own uncertainty, which a bank adds, is not in it.
+    """
+    v = np.asarray(list(values), dtype=float)
+    if v.size < 2:
+        raise ValueError("need at least two years")
+    mean, sd = float(v.mean()), float(v.std(ddof=1))
+    return Exceedance(
+        n=int(v.size),
+        mean=mean,
+        sd=sd,
+        cov=sd / mean,
+        p50=mean,
+        p90=mean - Z_P90 * sd,
+        p90_empirical=float(np.percentile(v, 10)),  # linear interpolation, as in solar-model.js
+        min=float(v.min()),
+        max=float(v.max()),
+    )
+
+
 def add_energy(
     candidates: gpd.GeoDataFrame,
     mwp_per_ha: float,
     system_loss: float = ModelOptions.system_loss,
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
+    last_year: int | None = None,
 ) -> gpd.GeoDataFrame:
     """Add tilt, yield per kWp, installed capacity and annual energy to each candidate.
 
     Panels are assumed fixed, facing the equator, at the tilt that maximises the
-    annual yield in the candidate's climate.
+    annual yield in the candidate's climate. With last_year, the yield is also run
+    on every year from FIRST_SERIES_YEAR to last_year and the P90 is added.
     """
     opts = ModelOptions(system_loss=system_loss)
     out = candidates.copy()
     centroids = out.geometry.centroid.to_crs(4326)
-    tilts, yields = [], []
+    tilts, yields, p90s = [], [], []
     for pt in centroids:
         clim = fetch_climatology(pt.y, pt.x, cache_dir, session)
         tilt, kwh = optimal_tilt(clim, pt.y, opts=opts)
         tilts.append(tilt)
         yields.append(kwh)
+        if last_year is not None:
+            series = fetch_monthly(pt.y, pt.x, last_year, cache_dir, session)
+            az = 180 if pt.y >= 0 else 0
+            p90s.append(exceedance(yearly_yields(series, pt.y, tilt, az, opts).values()).p90)
     out["tilt_deg"] = tilts
     out["yield_kwh_per_kwp"] = yields
     out["capacity_mwp"] = out["area_ha"] * mwp_per_ha
     out["energy_mwh_year"] = out["capacity_mwp"] * out["yield_kwh_per_kwp"]  # MWp x kWh/kWp = MWh
+    if last_year is not None:
+        out["yield_p90_kwh_per_kwp"] = p90s
+        out["energy_p90_mwh_year"] = out["capacity_mwp"] * out["yield_p90_kwh_per_kwp"]
     return out

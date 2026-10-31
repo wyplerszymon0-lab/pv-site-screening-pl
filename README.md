@@ -217,6 +217,23 @@ NASA POWER is queried once per 0.1° cell; four requests cover Przykona.
 
 These are theoretical upper bounds: they assume every hectare that passes the screening is covered with panels, with no check on soil class, zoning, ownership or grid capacity.
 
+### Year-to-year variability: P50 / P90 (issue #33)
+
+The energy above is for an average year. Financing a solar farm uses **P90**, the energy exceeded in 9 years out of 10. `energy.py` now also runs the yield model on NASA POWER's month-by-month data for every year since 2001 (the CERES-based record the climatology also comes from), ported from Solar Site Intelligence and matching it to 10⁻⁹. New pipeline runs add `yield_p90_kwh_per_kwp` and `energy_p90_mwh_year` to every candidate.
+
+`python -m pvscreen.variability 3027` does it for the gminas already screened, from their candidates on the web map, without running the screening again, and writes [`reports/variability_3027.md`](reports/variability_3027.md):
+
+| Powiat turecki, all 926 candidates | GWh per year |
+|---|---:|
+| Average year (2001–2020 climatology) | 46,121 |
+| P50, mean of 2001–2025 | 46,288 |
+| **P90** | **43,649** (94.3 % of P50) |
+| Worst year, 2001 / best year, 2018 | 42,083 / 50,067 |
+
+- **Year-to-year σ is 4.4 %, so the P90 is 5.7 % below the P50.** The empirical 10th percentile (43,654) agrees with the normal approximation.
+- **The powiat's P90 is computed from its summed yearly energy, not by adding up P90s.** Pooling helps only when sites have different poor years. Here it hardly does (the sum of the gminas' P90s is 43,638), and partly by construction: the whole powiat, about 38 × 39 km, falls into **2 distinct NASA POWER irradiance series** (a ~1° grid), so the gminas are nearly perfectly correlated in this data. Real weather 40 km apart is strongly but not perfectly correlated.
+- **Weather only.** A bankable P90 also includes the yield model's and the satellite data's uncertainty, a few percent each, which would lower it.
+
 ### PL-2000 output (issue #10)
 
 Processing stays in PL-1992, but surveyors, the cadastre and local authorities work in **PL-2000**: four 3° zones (central meridians 15°, 18°, 21° and 24° E, EPSG:2176 – 2179) with a scale of 0.999923. `--crs pl2000` writes the candidates in the zone of the gmina:
