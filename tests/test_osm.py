@@ -221,3 +221,35 @@ def test_grid_is_fetched_as_far_beyond_the_gmina_as_the_grid_score_reaches(tmp_p
     assert (n2 - n1) * 111_000 == pytest.approx(margin - osm.MARGIN_M, rel=0.02)
     assert "power" in queries[1] and "building" not in queries[1]
     assert (tmp_path / f"osm_grid_3027062_{margin:.0f}m.json").exists()
+
+
+# ── OpenStreetMap as of a past date (issue #35) ──
+
+
+def test_as_of_puts_the_date_in_the_query_and_the_cache_name(tmp_path, gmina_fixture):
+    queries = []
+
+    class Recording(FakeSession):
+        def post(self, url, data=None, headers=None, timeout=None):
+            queries.append(data["data"])
+            return super().post(url, data, headers, timeout)
+
+    session = Recording([(200, {"elements": [{"type": "node", "id": 7}]}), (200, {"elements": []})])
+    old = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=(), as_of="2021-01-01")
+    now = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=())
+    assert old == [{"type": "node", "id": 7}] and now == []  # two snapshots, two cache files
+    assert queries[0].startswith('[out:json][timeout:600][date:"2021-01-01T00:00:00Z"];')
+    assert queries[1].startswith("[out:json][timeout:180];") and "date:" not in queries[1]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["osm_3027062.json", "osm_3027062_2021-01-01.json"]
+
+
+@pytest.mark.parametrize("bad", ["2021-1-1", "01-01-2021", "2021-02-30", "yesterday", "2999-01-01"])
+def test_as_of_must_be_a_past_iso_date(bad):
+    with pytest.raises(ValueError, match="as_of"):
+        osm.check_as_of(bad)
+
+
+def test_as_of_none_keeps_today_s_query_and_cache_name():
+    assert osm.check_as_of(None) is None
+    assert osm.cache_name("osm_1") == "osm_1.json"
+    assert osm.build_query((18.5, 51.9, 18.7, 52.0)).startswith("[out:json][timeout:180];\n(")

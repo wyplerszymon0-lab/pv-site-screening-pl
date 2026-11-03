@@ -145,3 +145,38 @@ def test_farms_only_outside_the_gmina_give_an_empty_table():
     tags = {"power": "plant", "plant:source": "solar"}
     farms = validate.farms_in_gmina([osm_way(1, tags, (1500, 1500, 1700, 1700))], gmina)
     assert farms.empty and list(farms.columns) == ["osm_id", "name", "area_ha", "geometry"]
+
+
+# ── farm land added since an older OpenStreetMap snapshot (issue #35) ──
+
+
+def farms_gdf(*boxes):
+    return gpd.GeoDataFrame(
+        {"osm_id": [f"way/{i}" for i in range(len(boxes))], "name": None, "area_ha": 0.0},
+        geometry=list(boxes),
+        crs="EPSG:2180",
+    )
+
+
+def test_new_farms_keep_only_land_that_was_not_a_farm_then():
+    now = farms_gdf(
+        box(0, 0, 200, 100),  # 2 ha, already there: dropped
+        box(300, 0, 700, 100),  # 4 ha, half of it there then: the 2 ha extension stays
+        box(800, 0, 1000, 100),  # 2 ha, new
+        box(0, 500, 150, 600),  # 1.5 ha, 0.75 there then: the 0.75 ha rest is too small
+    )
+    then = farms_gdf(box(0, 0, 200, 100), box(300, 0, 500, 100), box(0, 500, 75, 600))
+    new = validate.new_farms(now, then)
+    assert list(new["osm_id"]) == ["way/1", "way/2"]
+    assert list(new["area_ha"].round(6)) == [2.0, 2.0]
+    assert new.iloc[0].geometry.equals(box(500, 0, 700, 100))
+
+
+def test_new_farms_with_no_farm_then_are_all_of_today_s():
+    now = farms_gdf(box(0, 0, 200, 100))
+    assert validate.new_farms(now, farms_gdf()).equals(now)
+
+
+def test_farm_query_as_of_a_date():
+    q = validate.build_farm_query((18.54, 51.94, 18.74, 52.05), as_of="2021-01-01")
+    assert q.startswith('[out:json][timeout:600][date:"2021-01-01T00:00:00Z"];')

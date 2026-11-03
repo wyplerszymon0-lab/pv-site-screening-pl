@@ -5,6 +5,10 @@ plant:source=solar) are compared with the candidate areas: if the screening
 captures what makes a site buildable, built farms should fall inside candidates
 more often than chance (the candidates' share of the gmina) would predict.
 Farms that fall outside are attributed to the exclusion that covers them.
+
+With --as-of the check is out of sample in time: the gmina is screened on
+OpenStreetMap as it was on that date, and only the farm land added since then
+is tested (issue #35).
 """
 
 from __future__ import annotations
@@ -24,10 +28,10 @@ MIN_FARM_HA = 1.0  # smaller "plants" in OSM are rooftop or yard installations
 DEFAULT_CACHE = Path("data/osm")
 
 
-def build_farm_query(bounds_wgs84: tuple[float, float, float, float]) -> str:
+def build_farm_query(bounds_wgs84: tuple[float, float, float, float], as_of: str | None = None) -> str:
     west, south, east, north = bounds_wgs84
     bbox = f"{south:.5f},{west:.5f},{north:.5f},{east:.5f}"
-    return f'[out:json][timeout:180];\nnwr["power"="plant"]["plant:source"="solar"]({bbox});\nout geom;'
+    return f'{osm.settings(as_of)}\nnwr["power"="plant"]["plant:source"="solar"]({bbox});\nout geom;'
 
 
 def fetch_farm_elements(
@@ -35,12 +39,13 @@ def fetch_farm_elements(
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
     waits: tuple[float, ...] = (30, 90, 180),
+    as_of: str | None = None,
 ) -> list[dict]:
     teryt = gmina.iloc[0]["teryt"]
-    path = Path(cache_dir) / f"solar_farms_{teryt}.json"
+    path = Path(cache_dir) / osm.cache_name(f"solar_farms_{teryt}", as_of)
     if not path.exists():
         bounds = tuple(gmina.to_crs(4326).total_bounds)
-        resp = osm._post_with_retry(session or requests.Session(), build_farm_query(bounds), waits)
+        resp = osm._post_with_retry(session or requests.Session(), build_farm_query(bounds, as_of), waits)
         resp.raise_for_status()
         payload = resp.json()
         if payload.get("remark"):
@@ -96,6 +101,23 @@ def farms_in_gmina(elements: list[dict], gmina: gpd.GeoDataFrame) -> gpd.GeoData
     )
     farms["area_ha"] = farms.geometry.area / 10_000
     return farms[farms["area_ha"] >= MIN_FARM_HA].reset_index(drop=True)
+
+
+def new_farms(now: gpd.GeoDataFrame, then: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Farm land mapped now that was not yet farm land in the older snapshot.
+
+    Each of today's farms loses the part already mapped as a farm then; what is
+    left is kept if it is still at least MIN_FARM_HA. A farm extended since the
+    snapshot thus counts with its extension only.
+    """
+    if then.empty or now.empty:
+        return now.copy()
+    old = unary_union(list(then.geometry))
+    out = now.copy()
+    out["geometry"] = [g.difference(old) for g in now.geometry]
+    out = gpd.GeoDataFrame(out, geometry="geometry", crs=now.crs)
+    out["area_ha"] = out.geometry.area / 10_000
+    return out[out["area_ha"] >= MIN_FARM_HA].reset_index(drop=True)
 
 
 def evaluate(
@@ -154,11 +176,11 @@ def evaluate(
     return per_farm, summary
 
 
-def reason_layers(gmina: gpd.GeoDataFrame) -> dict[str, object]:
+def reason_layers(gmina: gpd.GeoDataFrame, as_of: str | None = None) -> dict[str, object]:
     """The exclusion layers of the screening, by label, for attributing misses."""
     from pvscreen import protected, suitability, terrain
 
-    feats = osm.elements_to_gdf(osm.fetch_elements(gmina))
+    feats = osm.elements_to_gdf(osm.fetch_elements(gmina, as_of=as_of))
     layers = {f"osm:{r.rule}": r.geometry for r in osm.exclusions(feats, gmina).itertuples()}
     areas = protected.protected_areas(gmina)
     for r in areas[areas["kind"] == protected.EXCLUDE].itertuples():
@@ -221,18 +243,79 @@ def _summary_row(teryt: str) -> dict:
     }
 
 
+def _row(teryt: str, name: str, gmina_ha: float, candidates: gpd.GeoDataFrame, summary: dict) -> dict:
+    return {
+        "teryt": teryt,
+        "name": name,
+        "gmina_ha": gmina_ha,
+        "candidate_ha": candidates.geometry.area.sum() / 10_000,
+        "farms": summary["farms"],
+        "farm_ha": summary["farm_area_ha"],
+        "farm_ha_in": (
+            summary["farm_area_ha"] * summary["farm_area_in_candidates"] if summary["farms"] else 0.0
+        ),
+    }
+
+
+def before_and_after(teryt: str, as_of: str) -> tuple[gpd.GeoDataFrame, dict, dict]:
+    """The farm land added since as_of, checked against candidates screened on the
+    OpenStreetMap of that date and on today's.
+
+    Returns the per-farm table (against the old screening, with the old exclusion
+    that covers each miss) and one pooled_table row for each screening.
+    """
+    from pvscreen.boundary import fetch_gmina
+    from pvscreen.suitability import load_inputs, screen
+
+    gm = fetch_gmina(teryt)
+    farms = new_farms(
+        farms_in_gmina(fetch_farm_elements(gm), gm),
+        farms_in_gmina(fetch_farm_elements(gm, as_of=as_of), gm),
+    )
+    then = screen(gm, inputs=load_inputs(gm, as_of=as_of))
+    now = screen(gm)
+    name, gmina_ha = gm.iloc[0]["name"], gm.to_crs(WORK_CRS).geometry.area.sum() / 10_000
+    if farms.empty:
+        empty = {"farms": 0, "farm_area_ha": 0.0, "farm_area_in_candidates": float("nan")}
+        return farms, _row(teryt, name, gmina_ha, then, empty), _row(teryt, name, gmina_ha, now, empty)
+    per_farm, s_then = evaluate(farms, then, gm, reason_layers(gm, as_of))
+    _, s_now = evaluate(farms, now, gm)
+    return per_farm, _row(teryt, name, gmina_ha, then, s_then), _row(teryt, name, gmina_ha, now, s_now)
+
+
 if __name__ == "__main__":
-    import sys
+    import argparse
 
     from pvscreen.boundary import fetch_gmina
     from pvscreen.suitability import screen
 
-    if len(sys.argv) > 2:  # several gminas: one pooled table
-        pd.set_option("display.width", 180)
-        print(pooled_table([_summary_row(t) for t in sys.argv[1:]]).round(3).to_string(index=False))
-        sys.exit(0)
+    parser = argparse.ArgumentParser(description="Check the candidates against existing solar farms.")
+    parser.add_argument("teryt", nargs="*", default=["3027062"], help="7-digit TERYT codes of gminas")
+    parser.add_argument(
+        "--as-of",
+        type=osm.check_as_of,
+        help="YYYY-MM-DD: screen on OpenStreetMap as of this date, test only farms added since",
+    )
+    args = parser.parse_args()
+    pd.set_option("display.width", 180)
 
-    gm = fetch_gmina(sys.argv[1] if len(sys.argv) > 1 else "3027062")
+    if args.as_of:
+        runs = [before_and_after(t, args.as_of) for t in args.teryt]
+        cols = ["osm_id", "name", "area_ha", "share_in_candidates", "main_reason_outside"]
+        for t, (per_farm, _, _) in zip(args.teryt, runs, strict=True):
+            if len(per_farm):
+                print(f"{t}: farm land added since {args.as_of}, against the old screening")
+                print(per_farm[cols].sort_values("area_ha", ascending=False).round(2).to_string(index=False))
+        for label, col in ((f"screened on OSM as of {args.as_of}", 1), ("screened on today's OSM", 2)):
+            print(f"\n{label}")
+            print(pooled_table([r[col] for r in runs]).round(3).to_string(index=False))
+        raise SystemExit(0)
+
+    if len(args.teryt) > 1:  # several gminas: one pooled table
+        print(pooled_table([_summary_row(t) for t in args.teryt]).round(3).to_string(index=False))
+        raise SystemExit(0)
+
+    gm = fetch_gmina(args.teryt[0])
     farms = farms_in_gmina(fetch_farm_elements(gm), gm)
     per_farm, summary = evaluate(farms, screen(gm), gm, reason_layers(gm))
     # Sensitivity: farms often bring their own substation, which then makes their
@@ -241,7 +324,6 @@ if __name__ == "__main__":
     _, without_own = evaluate(farms, screen(gm, ignore_substations_near=farm_union), gm)
     summary["score_under_farms_without_their_substations"] = without_own["score_under_farms"]
     summary["score_of_all_candidate_area_without_them"] = without_own["score_of_all_candidate_area"]
-    pd.set_option("display.width", 180)
     cols = ["osm_id", "name", "area_ha", "share_in_candidates", "candidate_score", "main_reason_outside"]
     print(per_farm[cols].sort_values("area_ha", ascending=False).round(2).to_string(index=False))
     for k, v in summary.items():

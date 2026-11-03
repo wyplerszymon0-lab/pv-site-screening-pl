@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import geopandas as gpd
@@ -95,15 +96,44 @@ RULES = {
 }
 
 
+def check_as_of(as_of: str | None) -> str | None:
+    """A past date as YYYY-MM-DD (or None for today's data); anything else is refused."""
+    if as_of is None:
+        return None
+    try:
+        day = date.fromisoformat(as_of)
+    except ValueError:
+        day = None
+    if day is None or day.isoformat() != as_of:
+        raise ValueError(f"as_of must be a date as YYYY-MM-DD, got {as_of!r}")
+    if day >= date.today():
+        raise ValueError(f"as_of must be in the past, got {as_of}")
+    return as_of
+
+
+def settings(as_of: str | None = None) -> str:
+    """The query's settings line. With as_of, Overpass answers from its history: the
+    data as it was at midnight UTC that day ("attic" data, slower to query)."""
+    if check_as_of(as_of) is None:
+        return "[out:json][timeout:180];"
+    return f'[out:json][timeout:600][date:"{as_of}T00:00:00Z"];'
+
+
+def cache_name(stem: str, as_of: str | None = None) -> str:
+    return f"{stem}.json" if as_of is None else f"{stem}_{check_as_of(as_of)}.json"
+
+
 def build_query(
-    bounds_wgs84: tuple[float, float, float, float], statements: tuple[str, ...] = STATEMENTS
+    bounds_wgs84: tuple[float, float, float, float],
+    statements: tuple[str, ...] = STATEMENTS,
+    as_of: str | None = None,
 ) -> str:
     west, south, east, north = bounds_wgs84
     bbox = f"{south:.5f},{west:.5f},{north:.5f},{east:.5f}"
     body = "\n".join(f" {s}({bbox});" for s in statements)
     # Plain "out geom" (body verbosity): "out geom tags" would print relations
     # without their member ways, so multipolygons would have no geometry.
-    return f"[out:json][timeout:180];\n(\n{body}\n);\nout geom;"
+    return f"{settings(as_of)}\n(\n{body}\n);\nout geom;"
 
 
 RETRY_STATUS = (429, 502, 503, 504)  # busy, or a gateway in front of an overloaded server
@@ -126,11 +156,12 @@ def fetch_elements(
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
     waits: tuple[float, ...] = (30, 90, 180),
+    as_of: str | None = None,
 ) -> list[dict]:
-    """Every feature the screening uses, around the gmina (bounding box + MARGIN_M)."""
-    return _fetch(
-        gmina, f"osm_{gmina.iloc[0]['teryt']}.json", MARGIN_M, STATEMENTS, cache_dir, session, waits
-    )
+    """Every feature the screening uses, around the gmina (bounding box + MARGIN_M),
+    as mapped today or, with as_of (YYYY-MM-DD), as mapped on that date."""
+    name = cache_name(f"osm_{gmina.iloc[0]['teryt']}", as_of)
+    return _fetch(gmina, name, MARGIN_M, STATEMENTS, cache_dir, session, waits, as_of)
 
 
 def fetch_grid_elements(
@@ -139,17 +170,19 @@ def fetch_grid_elements(
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
     waits: tuple[float, ...] = (30, 90, 180),
+    as_of: str | None = None,
 ) -> list[dict]:
     """Power lines and substations within margin_m of the gmina's bounding box."""
-    name = f"osm_grid_{gmina.iloc[0]['teryt']}_{margin_m:.0f}m.json"
-    return _fetch(gmina, name, margin_m, GRID_STATEMENTS, cache_dir, session, waits)
+    name = cache_name(f"osm_grid_{gmina.iloc[0]['teryt']}_{margin_m:.0f}m", as_of)
+    return _fetch(gmina, name, margin_m, GRID_STATEMENTS, cache_dir, session, waits, as_of)
 
 
-def _fetch(gmina, filename, margin_m, statements, cache_dir, session, waits) -> list[dict]:
+def _fetch(gmina, filename, margin_m, statements, cache_dir, session, waits, as_of=None) -> list[dict]:
     path = Path(cache_dir) / filename
     if not path.exists():
         bounds = tuple(gmina.to_crs(WORK_CRS).buffer(margin_m).to_crs(4326).total_bounds)
-        resp = _post_with_retry(session or requests.Session(), build_query(bounds, statements), waits)
+        query = build_query(bounds, statements, as_of)
+        resp = _post_with_retry(session or requests.Session(), query, waits)
         resp.raise_for_status()
         payload = resp.json()
         if payload.get("remark"):  # Overpass reports timeouts and errors here, with HTTP 200
