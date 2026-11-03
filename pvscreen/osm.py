@@ -140,13 +140,18 @@ RETRY_STATUS = (429, 502, 503, 504)  # busy, or a gateway in front of an overloa
 
 
 def _post_with_retry(session, query: str, waits=(30, 90, 180)) -> requests.Response:
-    """Overpass answers 429/502/503/504 when busy; wait and retry a couple of times."""
+    """Overpass answers 429/502/503/504 when busy, or does not answer at all (seen: a
+    connect timeout after an hour of history queries); wait and retry a couple of times."""
     for wait in (*waits, None):
-        resp = session.post(
-            OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT}, timeout=300
-        )
-        if resp.status_code not in RETRY_STATUS or wait is None:
-            return resp
+        try:
+            resp = session.post(
+                OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT}, timeout=(60, 900)
+            )
+            if resp.status_code not in RETRY_STATUS or wait is None:
+                return resp
+        except (requests.ConnectionError, requests.Timeout):
+            if wait is None:
+                raise
         time.sleep(wait)
     raise AssertionError("unreachable")
 
@@ -181,15 +186,40 @@ def _fetch(gmina, filename, margin_m, statements, cache_dir, session, waits, as_
     path = Path(cache_dir) / filename
     if not path.exists():
         bounds = tuple(gmina.to_crs(WORK_CRS).buffer(margin_m).to_crs(4326).total_bounds)
-        query = build_query(bounds, statements, as_of)
-        resp = _post_with_retry(session or requests.Session(), query, waits)
-        resp.raise_for_status()
-        payload = resp.json()
-        if payload.get("remark"):  # Overpass reports timeouts and errors here, with HTTP 200
-            raise RuntimeError(f"Overpass: {payload['remark']}")
+        http = session or requests.Session()
+        # A query into the history with every layer at once runs out of Overpass's
+        # memory (2 GB, seen for Przykona), so as_of asks for one statement at a time.
+        if as_of is None:
+            queries = [(statements, None)]
+        else:
+            queries = [((s,), None if s in TODAY_ONLY else as_of) for s in statements]
+        elements: list[dict] = []
+        seen: set[tuple[str, int]] = set()
+        for group, date_ in queries:
+            for el in _query(http, bounds, group, date_, waits):
+                if (el["type"], el["id"]) not in seen:  # one way can match two statements
+                    seen.add((el["type"], el["id"]))
+                    elements.append(el)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload), encoding="utf-8")
+        path.write_text(json.dumps({"elements": elements}), encoding="utf-8")
     return json.loads(path.read_text(encoding="utf-8"))["elements"]
+
+
+# Statements always taken from today's data, also when as_of is given. Around Przykona
+# as of 2021-01-01, way["natural"="water"] ran out of Overpass's memory (2 GB) even for
+# 1/64 of the area, while every other statement fitted: some water polygon's history is
+# too heavy, not the amount of data. A solar farm does not create water, so today's
+# water does not add exclusions that only exist because of the farms.
+TODAY_ONLY = frozenset({'way["natural"="water"]'})
+
+
+def _query(http, bounds, statements, as_of, waits) -> list[dict]:
+    resp = _post_with_retry(http, build_query(bounds, statements, as_of), waits)
+    resp.raise_for_status()
+    payload = resp.json()
+    if payload.get("remark"):  # Overpass reports timeouts and errors here, with HTTP 200
+        raise RuntimeError(f"Overpass: {payload['remark']}")
+    return payload["elements"]
 
 
 def classify(tags: dict) -> str | None:

@@ -3,6 +3,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pytest
+import requests
 from shapely.geometry import LineString, Point, box
 
 from pvscreen import osm
@@ -234,12 +235,21 @@ def test_as_of_puts_the_date_in_the_query_and_the_cache_name(tmp_path, gmina_fix
             queries.append(data["data"])
             return super().post(url, data, headers, timeout)
 
-    session = Recording([(200, {"elements": [{"type": "node", "id": 7}]}), (200, {"elements": []})])
+    n = len(osm.STATEMENTS)
+    way = {"type": "way", "id": 7}  # e.g. a building that is also landuse=retail: matched twice
+    nodes = [(200, {"elements": [{"type": "node", "id": i}]}) for i in range(n - 2)]
+    history = [(200, {"elements": [way]})] * 2 + nodes
+    session = Recording([*history, (200, {"elements": []})])
     old = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=(), as_of="2021-01-01")
     now = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=())
-    assert old == [{"type": "node", "id": 7}] and now == []  # two snapshots, two cache files
-    assert queries[0].startswith('[out:json][timeout:600][date:"2021-01-01T00:00:00Z"];')
-    assert queries[1].startswith("[out:json][timeout:180];") and "date:" not in queries[1]
+    assert old == [way] + [{"type": "node", "id": i} for i in range(n - 2)] and now == []
+    # The history is asked one statement at a time (all at once ran out of Overpass's memory).
+    assert len(queries) == n + 1
+    dated = [q.startswith('[out:json][timeout:600][date:"2021-01-01T00:00:00Z"];') for q in queries[:n]]
+    today = [any(s in q for s in osm.TODAY_ONLY) for q in queries[:n]]
+    assert dated == [not x for x in today] and sum(today) == len(osm.TODAY_ONLY)  # water: today's
+    assert [len(q.splitlines()) for q in queries[:n]] == [5] * n  # settings, (, one statement, );, out
+    assert queries[n].startswith("[out:json][timeout:180];") and "date:" not in queries[n]
     assert sorted(p.name for p in tmp_path.iterdir()) == ["osm_3027062.json", "osm_3027062_2021-01-01.json"]
 
 
@@ -253,3 +263,18 @@ def test_as_of_none_keeps_today_s_query_and_cache_name():
     assert osm.check_as_of(None) is None
     assert osm.cache_name("osm_1") == "osm_1.json"
     assert osm.build_query((18.5, 51.9, 18.7, 52.0)).startswith("[out:json][timeout:180];\n(")
+
+
+
+def test_no_answer_from_overpass_is_retried():
+    class Flaky(FakeSession):
+        def post(self, url, data=None, headers=None, timeout=None):
+            if self.calls == 0:
+                self.calls += 1
+                raise requests.ConnectTimeout("no answer")
+            return super().post(url, data, headers, timeout)
+
+    session = Flaky([(200, {"elements": []})])
+    assert osm._post_with_retry(session, "q", waits=(0,)).status_code == 200 and session.calls == 2
+    with pytest.raises(requests.ConnectTimeout):
+        osm._post_with_retry(Flaky([]), "q", waits=())
