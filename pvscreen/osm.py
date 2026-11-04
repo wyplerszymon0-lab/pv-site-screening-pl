@@ -22,7 +22,7 @@ import requests
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import polygonize, unary_union
 
-from pvscreen import WORK_CRS
+from pvscreen import WORK_CRS, osm_extract
 from pvscreen.boundary import USER_AGENT
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -111,29 +111,19 @@ def check_as_of(as_of: str | None) -> str | None:
     return as_of
 
 
-def settings(as_of: str | None = None) -> str:
-    """The query's settings line. With as_of, Overpass answers from its history: the
-    data as it was at midnight UTC that day ("attic" data, slower to query)."""
-    if check_as_of(as_of) is None:
-        return "[out:json][timeout:180];"
-    return f'[out:json][timeout:600][date:"{as_of}T00:00:00Z"];'
-
-
 def cache_name(stem: str, as_of: str | None = None) -> str:
     return f"{stem}.json" if as_of is None else f"{stem}_{check_as_of(as_of)}.json"
 
 
 def build_query(
-    bounds_wgs84: tuple[float, float, float, float],
-    statements: tuple[str, ...] = STATEMENTS,
-    as_of: str | None = None,
+    bounds_wgs84: tuple[float, float, float, float], statements: tuple[str, ...] = STATEMENTS
 ) -> str:
     west, south, east, north = bounds_wgs84
     bbox = f"{south:.5f},{west:.5f},{north:.5f},{east:.5f}"
     body = "\n".join(f" {s}({bbox});" for s in statements)
     # Plain "out geom" (body verbosity): "out geom tags" would print relations
     # without their member ways, so multipolygons would have no geometry.
-    return f"{settings(as_of)}\n(\n{body}\n);\nout geom;"
+    return f"[out:json][timeout:180];\n(\n{body}\n);\nout geom;"
 
 
 RETRY_STATUS = (429, 502, 503, 504)  # busy, or a gateway in front of an overloaded server
@@ -145,7 +135,7 @@ def _post_with_retry(session, query: str, waits=(30, 90, 180)) -> requests.Respo
     for wait in (*waits, None):
         try:
             resp = session.post(
-                OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT}, timeout=(60, 900)
+                OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT}, timeout=(60, 300)
             )
             if resp.status_code not in RETRY_STATUS or wait is None:
                 return resp
@@ -164,9 +154,9 @@ def fetch_elements(
     as_of: str | None = None,
 ) -> list[dict]:
     """Every feature the screening uses, around the gmina (bounding box + MARGIN_M),
-    as mapped today or, with as_of (YYYY-MM-DD), as mapped on that date."""
+    as mapped today (Overpass) or, with as_of (YYYY-MM-DD), on that date (osm_extract)."""
     name = cache_name(f"osm_{gmina.iloc[0]['teryt']}", as_of)
-    return _fetch(gmina, name, MARGIN_M, STATEMENTS, cache_dir, session, waits, as_of)
+    return _fetch(gmina, name, MARGIN_M, STATEMENTS, cache_dir, session, waits, as_of, _is_used)
 
 
 def fetch_grid_elements(
@@ -179,47 +169,34 @@ def fetch_grid_elements(
 ) -> list[dict]:
     """Power lines and substations within margin_m of the gmina's bounding box."""
     name = cache_name(f"osm_grid_{gmina.iloc[0]['teryt']}_{margin_m:.0f}m", as_of)
-    return _fetch(gmina, name, margin_m, GRID_STATEMENTS, cache_dir, session, waits, as_of)
+    return _fetch(gmina, name, margin_m, GRID_STATEMENTS, cache_dir, session, waits, as_of, _is_grid)
 
 
-def _fetch(gmina, filename, margin_m, statements, cache_dir, session, waits, as_of=None) -> list[dict]:
+def _is_used(tags: dict) -> bool:
+    return classify(tags) is not None
+
+
+def _is_grid(tags: dict) -> bool:
+    return (classify(tags) or "").startswith("grid:")
+
+
+def _fetch(
+    gmina, filename, margin_m, statements, cache_dir, session, waits, as_of=None, keep=None
+) -> list[dict]:
     path = Path(cache_dir) / filename
     if not path.exists():
         bounds = tuple(gmina.to_crs(WORK_CRS).buffer(margin_m).to_crs(4326).total_bounds)
-        http = session or requests.Session()
-        # A query into the history with every layer at once runs out of Overpass's
-        # memory (2 GB, seen for Przykona), so as_of asks for one statement at a time.
-        if as_of is None:
-            queries = [(statements, None)]
+        if as_of is not None:
+            payload = {"elements": osm_extract.elements(bounds, as_of, keep)}
         else:
-            queries = [((s,), None if s in TODAY_ONLY else as_of) for s in statements]
-        elements: list[dict] = []
-        seen: set[tuple[str, int]] = set()
-        for group, date_ in queries:
-            for el in _query(http, bounds, group, date_, waits):
-                if (el["type"], el["id"]) not in seen:  # one way can match two statements
-                    seen.add((el["type"], el["id"]))
-                    elements.append(el)
+            resp = _post_with_retry(session or requests.Session(), build_query(bounds, statements), waits)
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get("remark"):  # Overpass reports timeouts and errors here, with HTTP 200
+                raise RuntimeError(f"Overpass: {payload['remark']}")
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"elements": elements}), encoding="utf-8")
+        path.write_text(json.dumps(payload), encoding="utf-8")
     return json.loads(path.read_text(encoding="utf-8"))["elements"]
-
-
-# Statements always taken from today's data, also when as_of is given. Around Przykona
-# as of 2021-01-01, way["natural"="water"] ran out of Overpass's memory (2 GB) even for
-# 1/64 of the area, while every other statement fitted: some water polygon's history is
-# too heavy, not the amount of data. A solar farm does not create water, so today's
-# water does not add exclusions that only exist because of the farms.
-TODAY_ONLY = frozenset({'way["natural"="water"]'})
-
-
-def _query(http, bounds, statements, as_of, waits) -> list[dict]:
-    resp = _post_with_retry(http, build_query(bounds, statements, as_of), waits)
-    resp.raise_for_status()
-    payload = resp.json()
-    if payload.get("remark"):  # Overpass reports timeouts and errors here, with HTTP 200
-        raise RuntimeError(f"Overpass: {payload['remark']}")
-    return payload["elements"]
 
 
 def classify(tags: dict) -> str | None:

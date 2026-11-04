@@ -227,30 +227,27 @@ def test_grid_is_fetched_as_far_beyond_the_gmina_as_the_grid_score_reaches(tmp_p
 # ── OpenStreetMap as of a past date (issue #35) ──
 
 
-def test_as_of_puts_the_date_in_the_query_and_the_cache_name(tmp_path, gmina_fixture):
-    queries = []
+def test_as_of_reads_the_extract_and_has_its_own_cache_file(tmp_path, gmina_fixture, monkeypatch):
+    asked = []
 
-    class Recording(FakeSession):
-        def post(self, url, data=None, headers=None, timeout=None):
-            queries.append(data["data"])
-            return super().post(url, data, headers, timeout)
+    def fake(bounds, as_of, keep):
+        asked.append(as_of)
+        return [{"type": "node", "id": 7, "keep": keep({"building": "yes"}), "grid": keep({"power": "line"})}]
 
-    n = len(osm.STATEMENTS)
-    way = {"type": "way", "id": 7}  # e.g. a building that is also landuse=retail: matched twice
-    nodes = [(200, {"elements": [{"type": "node", "id": i}]}) for i in range(n - 2)]
-    history = [(200, {"elements": [way]})] * 2 + nodes
-    session = Recording([*history, (200, {"elements": []})])
-    old = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=(), as_of="2021-01-01")
-    now = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=session, waits=())
-    assert old == [way] + [{"type": "node", "id": i} for i in range(n - 2)] and now == []
-    # The history is asked one statement at a time (all at once ran out of Overpass's memory).
-    assert len(queries) == n + 1
-    dated = [q.startswith('[out:json][timeout:600][date:"2021-01-01T00:00:00Z"];') for q in queries[:n]]
-    today = [any(s in q for s in osm.TODAY_ONLY) for q in queries[:n]]
-    assert dated == [not x for x in today] and sum(today) == len(osm.TODAY_ONLY)  # water: today's
-    assert [len(q.splitlines()) for q in queries[:n]] == [5] * n  # settings, (, one statement, );, out
-    assert queries[n].startswith("[out:json][timeout:180];") and "date:" not in queries[n]
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["osm_3027062.json", "osm_3027062_2021-01-01.json"]
+    monkeypatch.setattr(osm.osm_extract, "elements", fake)
+    empty = FakeSession([(200, {"elements": []})])
+    old = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=FakeSession([]), as_of="2021-01-01")
+    now = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=empty, waits=())
+    grid = osm.fetch_grid_elements(gmina_fixture, 500, cache_dir=tmp_path, as_of="2021-01-01")
+    assert asked == ["2021-01-01", "2021-01-01"] and now == [] and empty.calls == 1
+    assert old[0]["keep"] and old[0]["grid"]  # exclusions use both kinds of feature
+    assert not grid[0]["keep"] and grid[0]["grid"]  # the grid layer only power
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert names == [
+        "osm_3027062.json",
+        "osm_3027062_2021-01-01.json",
+        "osm_grid_3027062_500m_2021-01-01.json",
+    ]
 
 
 @pytest.mark.parametrize("bad", ["2021-1-1", "01-01-2021", "2021-02-30", "yesterday", "2999-01-01"])

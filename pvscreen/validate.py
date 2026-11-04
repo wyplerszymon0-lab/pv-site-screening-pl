@@ -7,8 +7,8 @@ more often than chance (the candidates' share of the gmina) would predict.
 Farms that fall outside are attributed to the exclusion that covers them.
 
 With --as-of the check is out of sample in time: the gmina is screened on
-OpenStreetMap as it was on that date, and only the farm land added since then
-is tested (issue #35).
+OpenStreetMap as it was on that date, and only the farm land added between then
+and --until is tested (issue #35).
 """
 
 from __future__ import annotations
@@ -22,16 +22,21 @@ import pandas as pd
 import requests
 from shapely.ops import unary_union
 
-from pvscreen import WORK_CRS, osm
+from pvscreen import WORK_CRS, osm, osm_extract
 
 MIN_FARM_HA = 1.0  # smaller "plants" in OSM are rooftop or yard installations
+UNTIL = "2026-10-01"  # the "after" snapshot of --as-of: a dated extract, so results can be repeated
 DEFAULT_CACHE = Path("data/osm")
 
 
-def build_farm_query(bounds_wgs84: tuple[float, float, float, float], as_of: str | None = None) -> str:
+def build_farm_query(bounds_wgs84: tuple[float, float, float, float]) -> str:
     west, south, east, north = bounds_wgs84
     bbox = f"{south:.5f},{west:.5f},{north:.5f},{east:.5f}"
-    return f'{osm.settings(as_of)}\nnwr["power"="plant"]["plant:source"="solar"]({bbox});\nout geom;'
+    return f'[out:json][timeout:180];\nnwr["power"="plant"]["plant:source"="solar"]({bbox});\nout geom;'
+
+
+def _is_solar_plant(tags: dict) -> bool:
+    return tags.get("power") == "plant" and tags.get("plant:source") == "solar"
 
 
 def fetch_farm_elements(
@@ -45,11 +50,14 @@ def fetch_farm_elements(
     path = Path(cache_dir) / osm.cache_name(f"solar_farms_{teryt}", as_of)
     if not path.exists():
         bounds = tuple(gmina.to_crs(4326).total_bounds)
-        resp = osm._post_with_retry(session or requests.Session(), build_farm_query(bounds, as_of), waits)
-        resp.raise_for_status()
-        payload = resp.json()
-        if payload.get("remark"):
-            raise RuntimeError(f"Overpass: {payload['remark']}")
+        if as_of is not None:
+            payload = {"elements": osm_extract.elements(bounds, as_of, _is_solar_plant)}
+        else:
+            resp = osm._post_with_retry(session or requests.Session(), build_farm_query(bounds), waits)
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get("remark"):
+                raise RuntimeError(f"Overpass: {payload['remark']}")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload), encoding="utf-8")
     return json.loads(path.read_text(encoding="utf-8"))["elements"]
@@ -257,9 +265,9 @@ def _row(teryt: str, name: str, gmina_ha: float, candidates: gpd.GeoDataFrame, s
     }
 
 
-def before_and_after(teryt: str, as_of: str) -> tuple[gpd.GeoDataFrame, dict, dict]:
-    """The farm land added since as_of, checked against candidates screened on the
-    OpenStreetMap of that date and on today's.
+def before_and_after(teryt: str, as_of: str, until: str = UNTIL) -> tuple[gpd.GeoDataFrame, dict, dict]:
+    """The farm land added between as_of and until, checked against candidates screened
+    on the OpenStreetMap of each of the two dates.
 
     Returns the per-farm table (against the old screening, with the old exclusion
     that covers each miss) and one pooled_table row for each screening.
@@ -269,11 +277,11 @@ def before_and_after(teryt: str, as_of: str) -> tuple[gpd.GeoDataFrame, dict, di
 
     gm = fetch_gmina(teryt)
     farms = new_farms(
-        farms_in_gmina(fetch_farm_elements(gm), gm),
+        farms_in_gmina(fetch_farm_elements(gm, as_of=until), gm),
         farms_in_gmina(fetch_farm_elements(gm, as_of=as_of), gm),
     )
     then = screen(gm, inputs=load_inputs(gm, as_of=as_of))
-    now = screen(gm)
+    now = screen(gm, inputs=load_inputs(gm, as_of=until))
     name, gmina_ha = gm.iloc[0]["name"], gm.to_crs(WORK_CRS).geometry.area.sum() / 10_000
     if farms.empty:
         empty = {"farms": 0, "farm_area_ha": 0.0, "farm_area_in_candidates": float("nan")}
@@ -296,18 +304,21 @@ if __name__ == "__main__":
         type=osm.check_as_of,
         help="YYYY-MM-DD: screen on OpenStreetMap as of this date, test only farms added since",
     )
+    parser.add_argument(
+        "--until", type=osm.check_as_of, default=UNTIL, help="YYYY-MM-DD: the later snapshot for --as-of"
+    )
     args = parser.parse_args()
     pd.set_option("display.width", 180)
 
     if args.as_of:
-        runs = [before_and_after(t, args.as_of) for t in args.teryt]
+        runs = [before_and_after(t, args.as_of, args.until) for t in args.teryt]
         cols = ["osm_id", "name", "area_ha", "share_in_candidates", "main_reason_outside"]
         for t, (per_farm, _, _) in zip(args.teryt, runs, strict=True):
             if len(per_farm):
                 print(f"{t}: farm land added since {args.as_of}, against the old screening")
                 print(per_farm[cols].sort_values("area_ha", ascending=False).round(2).to_string(index=False))
-        for label, col in ((f"screened on OSM as of {args.as_of}", 1), ("screened on today's OSM", 2)):
-            print(f"\n{label}")
+        for day, col in ((args.as_of, 1), (args.until, 2)):
+            print(f"\nscreened on OSM as of {day}")
             print(pooled_table([r[col] for r in runs]).round(3).to_string(index=False))
         raise SystemExit(0)
 

@@ -177,6 +177,17 @@ def test_new_farms_with_no_farm_then_are_all_of_today_s():
     assert validate.new_farms(now, farms_gdf()).equals(now)
 
 
-def test_farm_query_as_of_a_date():
-    q = validate.build_farm_query((18.54, 51.94, 18.74, 52.05), as_of="2021-01-01")
-    assert q.startswith('[out:json][timeout:600][date:"2021-01-01T00:00:00Z"];')
+def test_farms_as_of_a_date_come_from_the_extract(tmp_path, monkeypatch):
+    gmina = GMINA.assign(teryt="0000002")
+    seen = {}
+
+    def fake(bounds, as_of, keep):
+        seen["as_of"] = as_of
+        seen["solar"] = keep({"power": "plant", "plant:source": "solar"})
+        seen["wind"] = keep({"power": "plant", "plant:source": "wind"})
+        return []
+
+    monkeypatch.setattr(validate.osm_extract, "elements", fake)
+    assert validate.fetch_farm_elements(gmina, cache_dir=tmp_path, as_of="2021-01-01") == []
+    assert seen == {"as_of": "2021-01-01", "solar": True, "wind": False}
+    assert (tmp_path / "solar_farms_0000002_2021-01-01.json").exists()
