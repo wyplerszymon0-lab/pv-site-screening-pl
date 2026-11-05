@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import geopandas as gpd
@@ -21,7 +22,7 @@ import requests
 from shapely.geometry import LineString, Point, Polygon
 from shapely.ops import polygonize, unary_union
 
-from pvscreen import WORK_CRS
+from pvscreen import WORK_CRS, osm_extract
 from pvscreen.boundary import USER_AGENT
 
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
@@ -95,6 +96,25 @@ RULES = {
 }
 
 
+def check_as_of(as_of: str | None) -> str | None:
+    """A past date as YYYY-MM-DD (or None for today's data); anything else is refused."""
+    if as_of is None:
+        return None
+    try:
+        day = date.fromisoformat(as_of)
+    except ValueError:
+        day = None
+    if day is None or day.isoformat() != as_of:
+        raise ValueError(f"as_of must be a date as YYYY-MM-DD, got {as_of!r}")
+    if day >= date.today():
+        raise ValueError(f"as_of must be in the past, got {as_of}")
+    return as_of
+
+
+def cache_name(stem: str, as_of: str | None = None) -> str:
+    return f"{stem}.json" if as_of is None else f"{stem}_{check_as_of(as_of)}.json"
+
+
 def build_query(
     bounds_wgs84: tuple[float, float, float, float], statements: tuple[str, ...] = STATEMENTS
 ) -> str:
@@ -110,13 +130,18 @@ RETRY_STATUS = (429, 502, 503, 504)  # busy, or a gateway in front of an overloa
 
 
 def _post_with_retry(session, query: str, waits=(30, 90, 180)) -> requests.Response:
-    """Overpass answers 429/502/503/504 when busy; wait and retry a couple of times."""
+    """Overpass answers 429/502/503/504 when busy, or does not answer at all (seen: a
+    connect timeout after an hour of history queries); wait and retry a couple of times."""
     for wait in (*waits, None):
-        resp = session.post(
-            OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT}, timeout=300
-        )
-        if resp.status_code not in RETRY_STATUS or wait is None:
-            return resp
+        try:
+            resp = session.post(
+                OVERPASS_URL, data={"data": query}, headers={"User-Agent": USER_AGENT}, timeout=(60, 300)
+            )
+            if resp.status_code not in RETRY_STATUS or wait is None:
+                return resp
+        except (requests.ConnectionError, requests.Timeout):
+            if wait is None:
+                raise
         time.sleep(wait)
     raise AssertionError("unreachable")
 
@@ -126,11 +151,12 @@ def fetch_elements(
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
     waits: tuple[float, ...] = (30, 90, 180),
+    as_of: str | None = None,
 ) -> list[dict]:
-    """Every feature the screening uses, around the gmina (bounding box + MARGIN_M)."""
-    return _fetch(
-        gmina, f"osm_{gmina.iloc[0]['teryt']}.json", MARGIN_M, STATEMENTS, cache_dir, session, waits
-    )
+    """Every feature the screening uses, around the gmina (bounding box + MARGIN_M),
+    as mapped today (Overpass) or, with as_of (YYYY-MM-DD), on that date (osm_extract)."""
+    name = cache_name(f"osm_{gmina.iloc[0]['teryt']}", as_of)
+    return _fetch(gmina, name, MARGIN_M, STATEMENTS, cache_dir, session, waits, as_of, _is_used)
 
 
 def fetch_grid_elements(
@@ -139,21 +165,35 @@ def fetch_grid_elements(
     cache_dir: Path = DEFAULT_CACHE,
     session: requests.Session | None = None,
     waits: tuple[float, ...] = (30, 90, 180),
+    as_of: str | None = None,
 ) -> list[dict]:
     """Power lines and substations within margin_m of the gmina's bounding box."""
-    name = f"osm_grid_{gmina.iloc[0]['teryt']}_{margin_m:.0f}m.json"
-    return _fetch(gmina, name, margin_m, GRID_STATEMENTS, cache_dir, session, waits)
+    name = cache_name(f"osm_grid_{gmina.iloc[0]['teryt']}_{margin_m:.0f}m", as_of)
+    return _fetch(gmina, name, margin_m, GRID_STATEMENTS, cache_dir, session, waits, as_of, _is_grid)
 
 
-def _fetch(gmina, filename, margin_m, statements, cache_dir, session, waits) -> list[dict]:
+def _is_used(tags: dict) -> bool:
+    return classify(tags) is not None
+
+
+def _is_grid(tags: dict) -> bool:
+    return (classify(tags) or "").startswith("grid:")
+
+
+def _fetch(
+    gmina, filename, margin_m, statements, cache_dir, session, waits, as_of=None, keep=None
+) -> list[dict]:
     path = Path(cache_dir) / filename
     if not path.exists():
         bounds = tuple(gmina.to_crs(WORK_CRS).buffer(margin_m).to_crs(4326).total_bounds)
-        resp = _post_with_retry(session or requests.Session(), build_query(bounds, statements), waits)
-        resp.raise_for_status()
-        payload = resp.json()
-        if payload.get("remark"):  # Overpass reports timeouts and errors here, with HTTP 200
-            raise RuntimeError(f"Overpass: {payload['remark']}")
+        if as_of is not None:
+            payload = {"elements": osm_extract.elements(bounds, as_of, keep)}
+        else:
+            resp = _post_with_retry(session or requests.Session(), build_query(bounds, statements), waits)
+            resp.raise_for_status()
+            payload = resp.json()
+            if payload.get("remark"):  # Overpass reports timeouts and errors here, with HTTP 200
+                raise RuntimeError(f"Overpass: {payload['remark']}")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload), encoding="utf-8")
     return json.loads(path.read_text(encoding="utf-8"))["elements"]

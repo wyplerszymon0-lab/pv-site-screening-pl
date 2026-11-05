@@ -3,6 +3,7 @@ from pathlib import Path
 
 import geopandas as gpd
 import pytest
+import requests
 from shapely.geometry import LineString, Point, box
 
 from pvscreen import osm
@@ -221,3 +222,56 @@ def test_grid_is_fetched_as_far_beyond_the_gmina_as_the_grid_score_reaches(tmp_p
     assert (n2 - n1) * 111_000 == pytest.approx(margin - osm.MARGIN_M, rel=0.02)
     assert "power" in queries[1] and "building" not in queries[1]
     assert (tmp_path / f"osm_grid_3027062_{margin:.0f}m.json").exists()
+
+
+# ── OpenStreetMap as of a past date (issue #35) ──
+
+
+def test_as_of_reads_the_extract_and_has_its_own_cache_file(tmp_path, gmina_fixture, monkeypatch):
+    asked = []
+
+    def fake(bounds, as_of, keep):
+        asked.append(as_of)
+        return [{"type": "node", "id": 7, "keep": keep({"building": "yes"}), "grid": keep({"power": "line"})}]
+
+    monkeypatch.setattr(osm.osm_extract, "elements", fake)
+    empty = FakeSession([(200, {"elements": []})])
+    old = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=FakeSession([]), as_of="2021-01-01")
+    now = osm.fetch_elements(gmina_fixture, cache_dir=tmp_path, session=empty, waits=())
+    grid = osm.fetch_grid_elements(gmina_fixture, 500, cache_dir=tmp_path, as_of="2021-01-01")
+    assert asked == ["2021-01-01", "2021-01-01"] and now == [] and empty.calls == 1
+    assert old[0]["keep"] and old[0]["grid"]  # exclusions use both kinds of feature
+    assert not grid[0]["keep"] and grid[0]["grid"]  # the grid layer only power
+    names = sorted(p.name for p in tmp_path.iterdir())
+    assert names == [
+        "osm_3027062.json",
+        "osm_3027062_2021-01-01.json",
+        "osm_grid_3027062_500m_2021-01-01.json",
+    ]
+
+
+@pytest.mark.parametrize("bad", ["2021-1-1", "01-01-2021", "2021-02-30", "yesterday", "2999-01-01"])
+def test_as_of_must_be_a_past_iso_date(bad):
+    with pytest.raises(ValueError, match="as_of"):
+        osm.check_as_of(bad)
+
+
+def test_as_of_none_keeps_today_s_query_and_cache_name():
+    assert osm.check_as_of(None) is None
+    assert osm.cache_name("osm_1") == "osm_1.json"
+    assert osm.build_query((18.5, 51.9, 18.7, 52.0)).startswith("[out:json][timeout:180];\n(")
+
+
+
+def test_no_answer_from_overpass_is_retried():
+    class Flaky(FakeSession):
+        def post(self, url, data=None, headers=None, timeout=None):
+            if self.calls == 0:
+                self.calls += 1
+                raise requests.ConnectTimeout("no answer")
+            return super().post(url, data, headers, timeout)
+
+    session = Flaky([(200, {"elements": []})])
+    assert osm._post_with_retry(session, "q", waits=(0,)).status_code == 200 and session.calls == 2
+    with pytest.raises(requests.ConnectTimeout):
+        osm._post_with_retry(Flaky([]), "q", waits=())

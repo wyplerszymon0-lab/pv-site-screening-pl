@@ -102,3 +102,9 @@ def test_no_substation_means_no_grid_score():
     empty = gpd.GeoDataFrame({"kind": [], "osm_id": [], "voltage": []}, geometry=[], crs="EPSG:2180")
     out = su.score_candidates([box(0, 0, 200, 200)], slope, aspect, TRANSFORM, empty, None, CFG)
     assert out.iloc[0].score_grid == 0.0 and out.iloc[0].constraint_share == 0.0
+
+
+def test_as_of_needs_openstreetmap():
+    gmina = gpd.GeoDataFrame({"teryt": ["0000002"]}, geometry=[box(0, 0, 10, 10)], crs="EPSG:2180")
+    with pytest.raises(ValueError, match="OpenStreetMap"):
+        su.load_inputs(gmina, source="bdot10k", as_of="2021-01-01")  # before any download
