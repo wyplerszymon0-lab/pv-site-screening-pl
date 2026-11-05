@@ -62,6 +62,7 @@ python -m pvscreen.suitability 3027062  # writes outputs/candidates_3027062.gpkg
 python -m pvscreen.suitability 3027062 --crs pl2000  # the same in the gmina's PL-2000 zone
 python -m pvscreen.postgis 3027062      # starts PostGIS (Docker), runs the overlay in SQL, compares
 python -m pvscreen.validate 3027062     # compares the candidates with existing solar farms
+python -m pvscreen.validate --as-of 2021-01-01 3027062   # screens the old map, tests farms added since
 ```
 
 ## Results so far
@@ -182,7 +183,7 @@ Three things make this weaker than it looks:
 2. **Farms bring their own substations.** 5 of the 9 substations in the gmina lie within 31 m of a farm, which makes the farms' surroundings score well on the grid criterion. Leaving those substations out lowers every score but keeps the gap between farm land and other candidate land (0.879 vs 0.764), so the farms are also closer to the grid that was there anyway.
 3. **High recall is easy when half the gmina is a candidate.** This shows that the exclusions do not throw away buildable land, not that the screening pinpoints where farms go.
 
-A sharper test would screen the land as it was before the farms were built (OpenStreetMap history). The neighbouring gminas, below, are a second check.
+The neighbouring gminas, below, are a second check, and the [test on the old map](#before-the-farms-were-built-issue-35) removes the first problem.
 
 #### All five gminas
 
@@ -200,6 +201,39 @@ The same check for Przykona and its four neighbours, each screened with `python 
 
 - **The neighbours confirm the pattern, but weakly.** Built farms fall inside candidates far more often than chance in every gmina. Outside Przykona, though, 121 of the 145 ha are in Brudzew, and Dobra, Uniejów and Turek have only 4 – 13 ha of farms each.
 - **Brudzew is the only real miss.** 33 ha of its farm land lies outside the candidates: 22 ha in the 50 m building buffers (the farms' own inverter and transformer buildings, mapped as buildings), 4 ha too steep, 3.5 ha in a county-road buffer. That is the after-the-fact problem again: the farm created the features that now exclude it.
+
+#### Before the farms were built (issue #35)
+
+The checks above use a map drawn after the farms were built. This one screens the land on OpenStreetMap as of **1 January 2021**, then tests only farm land added between that date and 1 October 2026:
+
+```
+python -m pvscreen.validate --as-of 2021-01-01 3027062 3027022 3027033 1011043 3027082
+```
+
+Only one farm in the five gminas was mapped on the earlier date (2.5 ha in Przykona), so almost all of today's farm land counts as new. Both maps are [Geofabrik's dated extracts](https://download.geofabrik.de/europe/poland.html), so the result can be repeated. The last three columns test the same farm land on the later map, so the two sets differ only in the map.
+
+| Gmina | New farms | New farm land | Inside candidates, 2021 map | By chance | Lift | Inside candidates, 2026 map | By chance | Lift |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Przykona | 19 | 410.3 ha | 98.0 % | 54.6 % | 1.79 | 98.0 % | 50.8 % | 1.93 |
+| Brudzew | 4 | 120.8 ha | **90.0 %** | 48.9 % | 1.84 | **72.4 %** | 45.4 % | 1.60 |
+| Dobra | 3 | 4.0 ha | 95.9 % | 56.9 % | 1.69 | 95.9 % | 53.3 % | 1.80 |
+| Uniejów | 3 | 7.2 ha | 97.8 % | 52.1 % | 1.88 | 94.9 % | 48.0 % | 1.98 |
+| Turek | 4 | 12.8 ha | 98.6 % | 49.3 % | 2.00 | 98.5 % | 45.2 % | 2.18 |
+| **All five** | **33** | **555.1 ha** | **96.2 %** | **53.2 %** | **1.81** | **92.4 %** | **49.5 %** | **1.87** |
+| The four neighbours only | 14 | 144.8 ha | 91.3 % | 49.3 % | 1.85 | 76.5 % | 45.7 % | 1.67 |
+
+- **Brudzew's miss was mostly the after-the-fact problem.** Farm land inside candidates rises from 72.4 % to 90.0 %. Building buffers cost 22 ha on the later map and 0.05 ha on the old one, so the farms' own buildings were the cause. The 12 ha still outside are real disagreements: 3.9 ha too steep, 3.5 ha in a county-road buffer, and 4.6 ha covered by no exclusion layer, most likely pieces too small to stay a candidate.
+- **Przykona does not change.** Farm land inside candidates is 98.0 % on both maps. The 8.3 ha outside on the old map are mainly road buffers (5.6 ha) and forest (1.6 ha).
+- **The screening did not get sharper.** Pooled recall rises from 92.4 % to 96.2 %, but the lift falls from 1.87 to 1.81, because candidates grow by 8 % (28 883 to 31 146 ha) on the old map. The lift's ceiling is also lower there: 1 / 0.532 = 1.88. This test answers the objection that the farms shaped their own result. It does not show that the screening finds where farms go.
+
+What limits this test:
+
+1. **The date a farm was mapped is not the date it was built.** "New" means absent from the map on 1 January 2021. A farm built earlier but mapped later counts as new, and the old map may already show its effects.
+2. **The old map is less complete, which flatters the result.** In the Przykona bounding box it has about 77 % of today's buildings. Missing buildings mean fewer exclusions and larger candidates. The chance baseline accounts for the larger area, but not for whether a missing building stood on a particular farm site.
+3. **Only the map goes back in time.** Terrain and protected areas are current, so the ground is the ground after construction. Grading can make a site look flatter than it was, which would raise the result, and an area protected after 2021 would lower it. Neither effect is measured here.
+4. **The later date is 1 October 2026, not today.** Geofabrik keeps only some dates, and `--as-of` accepts only those it has: 1 January of past years and the first of recent months.
+5. **Most of the evidence is one gmina.** Przykona holds 74 % of the farm land and Brudzew 22 %; Dobra, Uniejów and Turek have 4 – 13 ha each.
+6. **It covers this study area only.** `--as-of` reads the Wielkopolskie and Łódzkie extracts (`REGIONS` in [`pvscreen/osm_extract.py`](pvscreen/osm_extract.py)). A gmina elsewhere needs its voivodeship added, or it finds nothing on the map.
 
 ### Energy yield (issue #7)
 
