@@ -235,6 +235,29 @@ What limits this test:
 5. **Most of the evidence is one gmina.** Przykona holds 74 % of the farm land and Brudzew 22 %; Dobra, Uniejów and Turek have 4 – 13 ha each.
 6. **It covers this study area only.** `--as-of` reads the Wielkopolskie and Łódzkie extracts (`REGIONS` in [`pvscreen/osm_extract.py`](pvscreen/osm_extract.py)). A gmina elsewhere needs its voivodeship added, or it finds nothing on the map.
 
+#### Does the score rank farm land higher? (issue #37)
+
+Keeping farm land inside candidates is easy when half a gmina is a candidate. A harder test is whether the score puts that land above other candidates. The same run prints an **AUC**: the chance that a hectare of farm land outscores a hectare of candidate land in its gmina, ties counted as half. 0.5 means the score has no skill. A candidate has one score, so the 95 % interval comes from a seeded bootstrap (10,000 runs) that resamples the candidates holding farm land, not hectares.
+
+| Gmina | Candidates with farm land | AUC, 2021 map | 95 % interval | AUC, 2026 map | 95 % interval |
+| :--- | ---: | ---: | :---: | ---: | :---: |
+| Przykona | 5 | 0.751 | 0.574 – 0.872 | 0.873 | 0.707 – 0.942 |
+| Brudzew | 3 | 0.891 | 0.654 – 0.948 | 0.903 | 0.838 – 0.965 |
+| Dobra | 3 | 0.540 | 0.343 – 0.795 | 0.532 | 0.189 – 0.802 |
+| Uniejów | 3 | 0.621 | 0.221 – 0.838 | 0.604 | 0.443 – 0.917 |
+| Turek | 3 | 0.927 | 0.346 – 0.996 | 0.909 | 0.304 – 0.996 |
+| **All five** | **17** | **0.781** | **0.625 – 0.883** | **0.873** | **0.765 – 0.929** |
+
+- **The score does rank farm land higher on the old map.** The pooled AUC is 0.781, and its interval stays above 0.5.
+- **The later map overstated this.** The pooled AUC falls from 0.873 to 0.781, nearly all of it in Przykona (0.873 to 0.751), which fits the farm-built substations described above. The two intervals overlap, so this test does not prove the size of the drop.
+- **No single gmina outside Przykona and Brudzew shows anything.** Dobra, Uniejów and Turek have three candidates each, and their intervals include 0.5.
+
+What limits this test:
+
+1. **The evidence is 17 candidates, and two gminas dominate it.** Przykona and Brudzew hold 96 % of the farm land in candidates. A bootstrap on three candidates cannot be trusted, so the per-gmina intervals are only a rough guide, and they are probably too narrow.
+2. **A high score does not show why farms went there.** Half of the score is distance to a substation, and developers also choose land for ownership, price and grid capacity, none of which the score sees.
+3. **The caveats of the old map apply here too,** above all that the mapped date is not the build date.
+
 ### Energy yield (issue #7)
 
 [`pvscreen/energy.py`](pvscreen/energy.py) is a Python port of the yield model from Solar Site Intelligence: NASA POWER monthly climatology (global and diffuse irradiance, air temperature) transposed to the panel plane with the isotropic-sky model, with glass reflection losses, temperature derating and 14 % system losses. Each candidate gets panels facing south at the tilt that maximises the annual yield in its climate, an installed capacity of 1 MWp per hectare (an assumption in `screening.toml`) and from that its annual energy.

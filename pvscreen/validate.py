@@ -234,6 +234,46 @@ def pooled_table(rows: list[dict]) -> pd.DataFrame:
     return table
 
 
+def score_rank(farms: gpd.GeoDataFrame, candidates: gpd.GeoDataFrame) -> pd.DataFrame:
+    """For each candidate holding farm land: how much, and how it ranks in its gmina.
+
+    below is the share of the gmina's candidate land scoring lower, ties counted as
+    half. A candidate has one score, so it is the unit here, not the hectare.
+    """
+    area = candidates.geometry.area.to_numpy()
+    scores = candidates["score"].to_numpy()
+    land = unary_union(list(farms.geometry))
+    farm_ha = np.array([g.intersection(land).area / 10_000 for g in candidates.geometry])
+    below = [(area[scores < s].sum() + area[scores == s].sum() / 2) / area.sum() for s in scores]
+    ranks = pd.DataFrame({"farm_ha": farm_ha, "below": below})
+    return ranks[ranks["farm_ha"] > 0].reset_index(drop=True)
+
+
+def pooled_rank(ranks: pd.DataFrame, runs: int = 10_000, seed: int = 1) -> dict[str, float]:
+    """AUC: the chance that a hectare of farm land outscores a hectare of candidate land
+    in its gmina, 0.5 for no skill. The 95 % interval resamples candidates, because
+    the hectares inside one candidate share a score and are not separate evidence."""
+    if ranks.empty:
+        return {"candidates": 0, "auc": np.nan, "low": np.nan, "high": np.nan}
+    ha, below = ranks["farm_ha"].to_numpy(), ranks["below"].to_numpy()
+    picks = np.random.default_rng(seed).integers(len(ranks), size=(runs, len(ranks)))
+    resampled = (ha[picks] * below[picks]).sum(axis=1) / ha[picks].sum(axis=1)
+    low, high = np.percentile(resampled, [2.5, 97.5])
+    return {
+        "candidates": len(ranks),
+        "auc": float((ha * below).sum() / ha.sum()),
+        "low": float(low),
+        "high": float(high),
+    }
+
+
+def rank_table(names: list[str], ranks: list[pd.DataFrame]) -> pd.DataFrame:
+    """One row per gmina plus the pooled row."""
+    rows = [{"name": n, **pooled_rank(r)} for n, r in zip(names, ranks, strict=True)]
+    rows.append({"name": "all", **pooled_rank(pd.concat(ranks, ignore_index=True))})
+    return pd.DataFrame(rows)
+
+
 def _summary_row(teryt: str) -> dict:
     from pvscreen import pipeline
 
@@ -265,12 +305,15 @@ def _row(teryt: str, name: str, gmina_ha: float, candidates: gpd.GeoDataFrame, s
     }
 
 
-def before_and_after(teryt: str, as_of: str, until: str = UNTIL) -> tuple[gpd.GeoDataFrame, dict, dict]:
+def before_and_after(
+    teryt: str, as_of: str, until: str = UNTIL
+) -> tuple[gpd.GeoDataFrame, dict, dict, pd.DataFrame, pd.DataFrame]:
     """The farm land added between as_of and until, checked against candidates screened
     on the OpenStreetMap of each of the two dates.
 
     Returns the per-farm table (against the old screening, with the old exclusion
-    that covers each miss) and one pooled_table row for each screening.
+    that covers each miss), one pooled_table row for each screening, and one
+    score_rank table for each screening.
     """
     from pvscreen.boundary import fetch_gmina
     from pvscreen.suitability import load_inputs, screen
@@ -285,10 +328,13 @@ def before_and_after(teryt: str, as_of: str, until: str = UNTIL) -> tuple[gpd.Ge
     name, gmina_ha = gm.iloc[0]["name"], gm.to_crs(WORK_CRS).geometry.area.sum() / 10_000
     if farms.empty:
         empty = {"farms": 0, "farm_area_ha": 0.0, "farm_area_in_candidates": float("nan")}
-        return farms, _row(teryt, name, gmina_ha, then, empty), _row(teryt, name, gmina_ha, now, empty)
+        no_ranks = pd.DataFrame({"farm_ha": [], "below": []})
+        row_then, row_now = _row(teryt, name, gmina_ha, then, empty), _row(teryt, name, gmina_ha, now, empty)
+        return farms, row_then, row_now, no_ranks, no_ranks
     per_farm, s_then = evaluate(farms, then, gm, reason_layers(gm, as_of))
     _, s_now = evaluate(farms, now, gm)
-    return per_farm, _row(teryt, name, gmina_ha, then, s_then), _row(teryt, name, gmina_ha, now, s_now)
+    row_then, row_now = _row(teryt, name, gmina_ha, then, s_then), _row(teryt, name, gmina_ha, now, s_now)
+    return per_farm, row_then, row_now, score_rank(farms, then), score_rank(farms, now)
 
 
 if __name__ == "__main__":
@@ -313,13 +359,18 @@ if __name__ == "__main__":
     if args.as_of:
         runs = [before_and_after(t, args.as_of, args.until) for t in args.teryt]
         cols = ["osm_id", "name", "area_ha", "share_in_candidates", "main_reason_outside"]
-        for t, (per_farm, _, _) in zip(args.teryt, runs, strict=True):
+        for t, (per_farm, *_) in zip(args.teryt, runs, strict=True):
             if len(per_farm):
                 print(f"{t}: farm land added since {args.as_of}, against the old screening")
                 print(per_farm[cols].sort_values("area_ha", ascending=False).round(2).to_string(index=False))
-        for day, col in ((args.as_of, 1), (args.until, 2)):
+        for day, rows, ranks in (
+            (args.as_of, [r[1] for r in runs], [r[3] for r in runs]),
+            (args.until, [r[2] for r in runs], [r[4] for r in runs]),
+        ):
             print(f"\nscreened on OSM as of {day}")
-            print(pooled_table([r[col] for r in runs]).round(3).to_string(index=False))
+            print(pooled_table(rows).round(3).to_string(index=False))
+            print("does the score rank farm land above other candidate land? (0.5 = no)")
+            print(rank_table([r["name"] for r in rows], ranks).round(3).to_string(index=False))
         raise SystemExit(0)
 
     if len(args.teryt) > 1:  # several gminas: one pooled table
