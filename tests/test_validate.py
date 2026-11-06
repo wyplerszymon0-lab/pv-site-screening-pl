@@ -256,3 +256,83 @@ def test_rank_table_has_a_row_per_gmina_and_a_pooled_row():
     table = validate.rank_table(["A", "B"], [one, two])
     assert table["name"].tolist() == ["A", "B", "all"]
     assert table["auc"].tolist() == pytest.approx([1.0, 0.0, 0.75])
+
+
+def scored_parts():
+    """Four equal candidates: the grid part follows the score, the slope part reverses it."""
+    boxes = [box(i * 100, 0, (i + 1) * 100, 100) for i in range(4)]
+    return gpd.GeoDataFrame(
+        {
+            "score": [0.1, 0.2, 0.3, 0.4],
+            "score_grid": [0.1, 0.2, 0.3, 0.4],
+            "score_slope": [0.4, 0.3, 0.2, 0.1],
+            "score_aspect": [1.0, 1.0, 1.0, 1.0],
+            "area_ha": [1.0, 2.0, 3.0, 4.0],
+        },
+        geometry=boxes,
+        crs="EPSG:2180",
+    )
+
+
+def test_part_ranks_ranks_the_same_land_by_each_part():
+    cfg = suitability.load_config()
+    ranks = validate.part_ranks(farms_gdf(box(300, 0, 400, 100)), scored_parts(), cfg)
+    assert tuple(ranks) == validate.RANKINGS
+    assert ranks["score"]["below"].tolist() == pytest.approx([0.875])
+    assert ranks["grid"]["below"].tolist() == pytest.approx([0.875])
+    assert ranks["slope"]["below"].tolist() == pytest.approx([0.125])
+    assert ranks["aspect"]["below"].tolist() == pytest.approx([0.5])  # all tied
+
+
+def test_part_ranks_weights_slope_and_aspect_as_the_score_does():
+    cfg = suitability.load_config()
+    parts = scored_parts()
+    parts["score_aspect"] = [0.0, 0.0, 0.0, 1.0]
+    ranks = validate.part_ranks(farms_gdf(box(300, 0, 400, 100)), parts, cfg)
+    terrain = cfg.weight_slope * 0.1 + cfg.weight_aspect * 1.0
+    assert terrain > cfg.weight_slope * 0.4
+    assert ranks["slope and aspect"]["below"].tolist() == pytest.approx([0.875])
+
+
+def test_paired_difference_of_a_ranking_with_itself_is_exactly_zero():
+    ranks = pd.DataFrame({"farm_ha": [1.0, 2.0, 3.0], "below": [0.2, 0.5, 0.9]})
+    assert validate.paired_difference(ranks, ranks) == {"difference": 0.0, "low": 0.0, "high": 0.0}
+
+
+def test_paired_difference_is_narrower_than_separate_intervals():
+    a = pd.DataFrame({"farm_ha": [1.0] * 6, "below": [0.1, 0.3, 0.5, 0.6, 0.8, 0.95]})
+    b = a.assign(below=a["below"] - 0.05)
+    d = validate.paired_difference(a, b)
+    assert d["difference"] == pytest.approx(0.05)
+    assert d["low"] == pytest.approx(0.05)
+    assert d["high"] == pytest.approx(0.05)
+    separate = validate.pooled_rank(a)
+    assert separate["high"] - separate["low"] > d["high"] - d["low"]
+
+
+def test_paired_difference_is_weighted_by_farm_land_and_seeded():
+    a = pd.DataFrame({"farm_ha": [3.0, 1.0], "below": [1.0, 0.0]})
+    b = pd.DataFrame({"farm_ha": [3.0, 1.0], "below": [0.0, 1.0]})
+    assert validate.paired_difference(a, b)["difference"] == pytest.approx(0.5)
+    assert validate.paired_difference(a, b) == validate.paired_difference(a, b)
+
+
+def test_paired_difference_without_farm_land_is_empty():
+    none = pd.DataFrame({"farm_ha": [], "below": []})
+    assert pd.isna(validate.paired_difference(none, none)["difference"])
+
+
+def test_part_table_pools_gminas_and_gives_the_lead_of_the_full_score():
+    one = {
+        "score": pd.DataFrame({"farm_ha": [3.0], "below": [1.0]}),
+        "grid": pd.DataFrame({"farm_ha": [3.0], "below": [0.5]}),
+    }
+    two = {
+        "score": pd.DataFrame({"farm_ha": [1.0], "below": [0.0]}),
+        "grid": pd.DataFrame({"farm_ha": [1.0], "below": [0.5]}),
+    }
+    table = validate.part_table([one, two]).set_index("ranked_by")
+    assert table.loc["score", "auc"] == pytest.approx(0.75)
+    assert table.loc["grid", "auc"] == pytest.approx(0.5)
+    assert table.loc["score", "score_lead"] == 0.0
+    assert table.loc["grid", "score_lead"] == pytest.approx(0.25)

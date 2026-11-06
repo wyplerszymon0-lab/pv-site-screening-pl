@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import geopandas as gpd
 import numpy as np
@@ -23,6 +24,9 @@ import requests
 from shapely.ops import unary_union
 
 from pvscreen import WORK_CRS, osm, osm_extract
+
+if TYPE_CHECKING:
+    from pvscreen.suitability import Config
 
 MIN_FARM_HA = 1.0  # smaller "plants" in OSM are rooftop or yard installations
 UNTIL = "2026-10-01"  # the "after" snapshot of --as-of: a dated extract, so results can be repeated
@@ -274,6 +278,58 @@ def rank_table(names: list[str], ranks: list[pd.DataFrame]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+RANKINGS = ("score", "grid", "slope", "aspect", "slope and aspect", "area")
+
+
+def part_ranks(
+    farms: gpd.GeoDataFrame, candidates: gpd.GeoDataFrame, cfg: Config
+) -> dict[str, pd.DataFrame]:
+    """score_rank by the full score, by each of its parts, and by candidate area, a naive
+    baseline: larger candidates can hold more farm land whatever their score."""
+    terrain = cfg.weight_slope * candidates["score_slope"] + cfg.weight_aspect * candidates["score_aspect"]
+    orders = {
+        "score": candidates["score"],
+        "grid": candidates["score_grid"],
+        "slope": candidates["score_slope"],
+        "aspect": candidates["score_aspect"],
+        "slope and aspect": terrain,
+        "area": candidates["area_ha"],
+    }
+    return {name: score_rank(farms, candidates.assign(score=o)) for name, o in orders.items()}
+
+
+def paired_difference(
+    a: pd.DataFrame, b: pd.DataFrame, runs: int = 10_000, seed: int = 1
+) -> dict[str, float]:
+    """AUC of a minus AUC of b, for two rankings of the same candidates. Both sides use the
+    same resampled candidates: they are not independent, so separate intervals mislead."""
+    if a.empty:
+        return {"difference": np.nan, "low": np.nan, "high": np.nan}
+    ha, gap = a["farm_ha"].to_numpy(), a["below"].to_numpy() - b["below"].to_numpy()
+    picks = np.random.default_rng(seed).integers(len(a), size=(runs, len(a)))
+    resampled = (ha[picks] * gap[picks]).sum(axis=1) / ha[picks].sum(axis=1)
+    low, high = np.percentile(resampled, [2.5, 97.5])
+    return {"difference": float((ha * gap).sum() / ha.sum()), "low": float(low), "high": float(high)}
+
+
+def part_table(ranks: list[dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    """Pooled AUC of each ranking, and the full score's lead over it."""
+    pooled = {name: pd.concat([r[name] for r in ranks], ignore_index=True) for name in ranks[0]}
+    rows = []
+    for name, table in pooled.items():
+        lead = paired_difference(pooled["score"], table)
+        rows.append(
+            {
+                "ranked_by": name,
+                **pooled_rank(table),
+                "score_lead": lead["difference"],
+                "lead_low": lead["low"],
+                "lead_high": lead["high"],
+            }
+        )
+    return pd.DataFrame(rows).drop(columns="candidates")
+
+
 def _summary_row(teryt: str) -> dict:
     from pvscreen import pipeline
 
@@ -307,16 +363,16 @@ def _row(teryt: str, name: str, gmina_ha: float, candidates: gpd.GeoDataFrame, s
 
 def before_and_after(
     teryt: str, as_of: str, until: str = UNTIL
-) -> tuple[gpd.GeoDataFrame, dict, dict, pd.DataFrame, pd.DataFrame]:
+) -> tuple[gpd.GeoDataFrame, dict, dict, dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
     """The farm land added between as_of and until, checked against candidates screened
     on the OpenStreetMap of each of the two dates.
 
     Returns the per-farm table (against the old screening, with the old exclusion
     that covers each miss), one pooled_table row for each screening, and one
-    score_rank table for each screening.
+    part_ranks result for each screening.
     """
     from pvscreen.boundary import fetch_gmina
-    from pvscreen.suitability import load_inputs, screen
+    from pvscreen.suitability import load_config, load_inputs, screen
 
     gm = fetch_gmina(teryt)
     farms = new_farms(
@@ -328,13 +384,14 @@ def before_and_after(
     name, gmina_ha = gm.iloc[0]["name"], gm.to_crs(WORK_CRS).geometry.area.sum() / 10_000
     if farms.empty:
         empty = {"farms": 0, "farm_area_ha": 0.0, "farm_area_in_candidates": float("nan")}
-        no_ranks = pd.DataFrame({"farm_ha": [], "below": []})
+        no_ranks = dict.fromkeys(RANKINGS, pd.DataFrame({"farm_ha": [], "below": []}))
         row_then, row_now = _row(teryt, name, gmina_ha, then, empty), _row(teryt, name, gmina_ha, now, empty)
         return farms, row_then, row_now, no_ranks, no_ranks
     per_farm, s_then = evaluate(farms, then, gm, reason_layers(gm, as_of))
     _, s_now = evaluate(farms, now, gm)
     row_then, row_now = _row(teryt, name, gmina_ha, then, s_then), _row(teryt, name, gmina_ha, now, s_now)
-    return per_farm, row_then, row_now, score_rank(farms, then), score_rank(farms, now)
+    cfg = load_config()
+    return per_farm, row_then, row_now, part_ranks(farms, then, cfg), part_ranks(farms, now, cfg)
 
 
 if __name__ == "__main__":
@@ -370,7 +427,10 @@ if __name__ == "__main__":
             print(f"\nscreened on OSM as of {day}")
             print(pooled_table(rows).round(3).to_string(index=False))
             print("does the score rank farm land above other candidate land? (0.5 = no)")
-            print(rank_table([r["name"] for r in rows], ranks).round(3).to_string(index=False))
+            table = rank_table([r["name"] for r in rows], [r["score"] for r in ranks])
+            print(table.round(3).to_string(index=False))
+            print("which part does the ranking? (lead: full score minus this ranking, same resamples)")
+            print(part_table(ranks).round(3).to_string(index=False))
         raise SystemExit(0)
 
     if len(args.teryt) > 1:  # several gminas: one pooled table

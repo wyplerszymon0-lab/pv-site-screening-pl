@@ -258,6 +258,29 @@ What limits this test:
 2. **A high score does not show why farms went there.** Half of the score is distance to a substation, and developers also choose land for ownership, price and grid capacity, none of which the score sees.
 3. **The caveats of the old map apply here too,** above all that the mapped date is not the build date.
 
+#### Which part of the score does the ranking? (issue #39)
+
+The same run ranks the same candidates by each part of the score, and by candidate area as a naive baseline, since larger candidates can hold more farm land whatever their score. The lead is the full score's AUC minus that ranking's AUC. It uses the same resampled candidates on both sides, because two rankings of the same candidates are not independent.
+
+| Ranked by | AUC, 2021 map | 95 % interval | Lead of the full score | 95 % interval | AUC, 2026 map |
+| :--- | ---: | :---: | ---: | :---: | ---: |
+| **Full score** | **0.781** | 0.625 – 0.883 | | | **0.873** |
+| Grid distance only | 0.782 | 0.622 – 0.890 | -0.001 | -0.035 – +0.018 | 0.848 |
+| Slope only | 0.503 | 0.225 – 0.816 | +0.278 | -0.139 – +0.611 | 0.526 |
+| Aspect only | 0.515 | 0.229 – 0.828 | +0.266 | -0.155 – +0.597 | 0.529 |
+| Slope and aspect | 0.510 | 0.226 – 0.836 | +0.270 | -0.162 – +0.609 | 0.522 |
+| Candidate area only | 0.685 | 0.417 – 0.840 | +0.095 | +0.033 – +0.243 | 0.655 |
+
+- **Grid distance does all the ranking.** On the old map it matches the full score to within 0.001, so slope and aspect add no measurable ranking power here.
+- **The score beats the naive baseline.** It leads candidate area by 0.095, and that interval stays above zero, so the result is more than farms landing in the biggest candidates.
+- **The 2021 grid is the honest figure for grid distance.** Grid-only AUC is 0.848 on the later map and 0.782 on the old one, which is the farm-built substations again.
+
+What this does not say:
+
+1. **It does not show that slope is irrelevant to siting.** Land too steep for a farm is already excluded before scoring, and what remains here is flat: across a gmina's candidates the slope score varies by 0.03 – 0.09 (standard deviation), against 0.16 – 0.23 for grid distance. Slope and aspect have little left to separate. In hilly terrain this could differ.
+2. **The intervals for slope and aspect are wide.** They run from about 0.23 to 0.83, so this measures no skill; it does not prove there is none.
+3. **It does not justify new weights.** Reweighting the score on these 17 candidates, then testing it on the same ones, would be circular.
+
 ### Energy yield (issue #7)
 
 [`pvscreen/energy.py`](pvscreen/energy.py) is a Python port of the yield model from Solar Site Intelligence: NASA POWER monthly climatology (global and diffuse irradiance, air temperature) transposed to the panel plane with the isotropic-sky model, with glass reflection losses, temperature derating and 14 % system losses. Each candidate gets panels facing south at the tilt that maximises the annual yield in its climate, an installed capacity of 1 MWp per hectare (an assumption in `screening.toml`) and from that its annual energy.
