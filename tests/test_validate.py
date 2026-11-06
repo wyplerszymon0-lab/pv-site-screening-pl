@@ -191,3 +191,68 @@ def test_farms_as_of_a_date_come_from_the_extract(tmp_path, monkeypatch):
     assert validate.fetch_farm_elements(gmina, cache_dir=tmp_path, as_of="2021-01-01") == []
     assert seen == {"as_of": "2021-01-01", "solar": True, "wind": False}
     assert (tmp_path / "solar_farms_0000002_2021-01-01.json").exists()
+
+
+def ranked_candidates(*scores):
+    """Candidates of 100 x 100 m in a row, with these scores."""
+    boxes = [box(i * 100, 0, (i + 1) * 100, 100) for i in range(len(scores))]
+    return gpd.GeoDataFrame({"score": list(scores)}, geometry=boxes, crs="EPSG:2180")
+
+
+def test_score_rank_gives_the_share_of_candidate_land_scoring_lower():
+    ranks = validate.score_rank(farms_gdf(box(200, 0, 300, 100)), ranked_candidates(0.2, 0.4, 0.8, 0.9))
+    assert ranks["farm_ha"].tolist() == pytest.approx([1.0])
+    assert ranks["below"].tolist() == pytest.approx([0.625])  # 2 lower, itself half: 2.5 of 4
+
+
+def test_score_rank_counts_ties_as_half():
+    ranks = validate.score_rank(farms_gdf(box(0, 0, 100, 100)), ranked_candidates(0.5, 0.5, 0.5, 0.5))
+    assert ranks["below"].tolist() == pytest.approx([0.5])
+
+
+def test_score_rank_weights_candidates_by_area():
+    wide = gpd.GeoDataFrame(
+        {"score": [0.2, 0.8]}, geometry=[box(0, 0, 300, 100), box(300, 0, 400, 100)], crs="EPSG:2180"
+    )
+    ranks = validate.score_rank(farms_gdf(box(300, 0, 400, 100)), wide)
+    assert ranks["below"].tolist() == pytest.approx([0.875])  # 3 of 4 lower, itself half of 1
+
+
+def test_score_rank_ignores_farm_land_outside_candidates():
+    farms = farms_gdf(box(50, 0, 150, 100), box(500, 0, 600, 100))
+    ranks = validate.score_rank(farms, ranked_candidates(0.2, 0.8))
+    assert ranks["farm_ha"].tolist() == pytest.approx([0.5, 0.5])
+
+
+def test_pooled_rank_weights_candidates_by_their_farm_land():
+    ranks = pd.DataFrame({"farm_ha": [3.0, 1.0], "below": [1.0, 0.0]})
+    assert validate.pooled_rank(ranks)["auc"] == pytest.approx(0.75)
+
+
+def test_pooled_rank_interval_is_seeded_and_widens_with_fewer_candidates():
+    few = pd.DataFrame({"farm_ha": [1.0] * 4, "below": [0.2, 0.4, 0.6, 0.8]})
+    many = pd.concat([few] * 25, ignore_index=True)
+    a, b, c = validate.pooled_rank(few), validate.pooled_rank(few), validate.pooled_rank(many)
+    assert a == b
+    assert a["low"] < a["auc"] < a["high"]
+    assert a["high"] - a["low"] > c["high"] - c["low"]
+    assert (a["candidates"], c["candidates"]) == (4, 100)
+
+
+def test_one_candidate_gives_no_width_to_the_interval():
+    r = validate.pooled_rank(pd.DataFrame({"farm_ha": [5.0], "below": [0.9]}))
+    assert r["low"] == r["high"] == pytest.approx(0.9)
+
+
+def test_no_farm_land_in_candidates_gives_no_auc():
+    r = validate.pooled_rank(pd.DataFrame({"farm_ha": [], "below": []}))
+    assert r["candidates"] == 0
+    assert pd.isna(r["auc"])
+
+
+def test_rank_table_has_a_row_per_gmina_and_a_pooled_row():
+    one = pd.DataFrame({"farm_ha": [3.0], "below": [1.0]})
+    two = pd.DataFrame({"farm_ha": [1.0], "below": [0.0]})
+    table = validate.rank_table(["A", "B"], [one, two])
+    assert table["name"].tolist() == ["A", "B", "all"]
+    assert table["auc"].tolist() == pytest.approx([1.0, 0.0, 0.75])
